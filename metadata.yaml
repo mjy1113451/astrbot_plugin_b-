@@ -1,1 +1,6 @@
-
+name: astrbot_plugin_b站bot
+display_name: b站bot
+desc: 
+version: v0.01
+author: mjy1113451
+repo: https://github.com/mjy1113451/astrbot_plugin_b-
