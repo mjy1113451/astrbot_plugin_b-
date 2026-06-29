@@ -1,0 +1,88 @@
+{
+  "api_base_url": {
+    "description": "OpenAI 兼容 API 地址",
+    "type": "string",
+    "hint": "用于AI视频分析的API地址，如 https://api.openai.com/v1",
+    "default": "https://api.openai.com/v1"
+  },
+  "api_key": {
+    "description": "API Key",
+    "type": "string",
+    "hint": "OpenAI 兼容 API Key",
+    "obvious_hint": true
+  },
+  "model": {
+    "description": "AI 模型名称",
+    "type": "string",
+    "hint": "用于视频分析的模型",
+    "default": "gpt-4.1-mini"
+  },
+  "bilibili_sessdata": {
+    "description": "B站 SESSDATA",
+    "type": "string",
+    "hint": "B站登录 Cookie 中的 SESSDATA，用于获取视频详情（可选，不填则使用无登录模式）"
+  },
+  "bilibili_jct": {
+    "description": "B站 bili_jct",
+    "type": "string",
+    "hint": "B站登录 Cookie 中的 bili_jct（可选）"
+  },
+  "bilibili_buvid3": {
+    "description": "B站 buvid3",
+    "type": "string",
+    "hint": "B站 buvid3（可选）"
+  },
+  "bilibili_dedeuserid": {
+    "description": "B站 DedeUserID",
+    "type": "string",
+    "hint": "B站用户UID（可选）"
+  },
+  "search_count": {
+    "description": "搜索返回视频数",
+    "type": "int",
+    "hint": "每次搜索返回的视频数量",
+    "default": 5
+  },
+  "kb_top_k": {
+    "description": "知识库检索结果数",
+    "type": "int",
+    "hint": "知识库语义搜索返回的Top K结果",
+    "default": 5
+  },
+  "kb_min_score": {
+    "description": "知识库最低相似度",
+    "type": "float",
+    "hint": "知识库检索最低相似度阈值(0~1)",
+    "default": 0.3
+  },
+  "auto_max_videos": {
+    "description": "自动模式每轮最多看视频数",
+    "type": "int",
+    "hint": "自动模式下一次启动总共刷多少个视频（0=不限直到手动停止）",
+    "default": 10
+  },
+  "auto_interval_min": {
+    "description": "自动模式视频间隔(秒)最小值",
+    "type": "int",
+    "hint": "刷完一个视频后最少等待多少秒再看下一个",
+    "default": 30
+  },
+  "auto_interval_max": {
+    "description": "自动模式视频间隔(秒)最大值",
+    "type": "int",
+    "hint": "刷完一个视频后最多等待多少秒再看下一个",
+    "default": 90
+  },
+  "auto_min_score": {
+    "description": "自动模式最低评分门槛",
+    "type": "float",
+    "hint": "AI给视频内容打分，低于此分数则跳过不分析（0~10）",
+    "default": 6.0
+  },
+  "auto_max_duration": {
+    "description": "自动模式跳过时长(秒)上限",
+    "type": "int",
+    "hint": "超过此时长的视频自动跳过（0=不限制），如900=跳过15分钟以上的视频",
+    "default": 900
+  }
+}
