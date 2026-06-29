@@ -63,3 +63,21 @@ git clone https://github.com/mjy1113451/astrbot_plugin_b-.git
 
 · Python 3.8+：插件开发语言
 · AstrBot Framework：插件运行依赖的机器人框架
+
+
+🤝 参与贡献
+
+欢迎通过以下方式参与本项目：
+
+· 提交 Issue 报告 Bug 或提出建议
+· 提交 Pull Request 贡献代码
+· Fork 本仓库进行个性化定制
+· 加入插件群提问 1079297679
+
+📄 许可证
+
+本项目采用 MIT License 开源协议，可自由使用、修改和分发。
+
+---
+
+📌 说明：以上内容基于仓库中的文件结构（knowledge_mgr.py、_conf_schema.json、logo.png）及提交记录生成。如需了解更详细的功能说明，建议查看 knowledge_mgr.py 源码中的函数注释与实现逻辑。
