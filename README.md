@@ -34,47 +34,6 @@
 
 ---
 
-## 🚀 快速开始
-
-### 1️⃣ 安装依赖
-
-```bash
-pip install -r requirements.txt
-```
-
-### 2️⃣ 配置
-
-```bash
-cp config.example.json Data/config.json
-# 编辑 Data/config.json 填入你的 API Key（统一API或OpenAI兼容接口）
-```
-
-### 3️⃣ 启动
-
-**交互式菜单**:
-```bash
-python3 new_agent.py
-```
-
-**Web管理面板**:
-```bash
-python3 web_panel.py
-# 访问 http://localhost:7860
-```
-
-**Termux 一键启动**:
-```bash
-bash start.sh
-```
-
-### 4️⃣ 首次使用
-
-1. 进入菜单后按 `3` 配置B站登录（扫码或Cookie）
-2. 按 `1` 启动机器人自动刷视频
-3. 按 `V` 手动分析特定视频
-4. 按 `N` 管理自定义知识
-
----
 
 ## 📋 主菜单功能速览
 
@@ -104,13 +63,6 @@ bash start.sh
 | `I` | 📥 导入配置 |
 | `O` | 📂 一键整理知识库 |
 
----
-
-## 🔒 隐私安全
-
-- API Key 在菜单显示和导出时自动脱敏（`mask_secret` / `sanitize_config_for_export`）
-- 一键恢复出厂设置（`R`）清除所有配置/登录/日志/知识库
-- 导出备份自动隐藏敏感字段（API Key、Cookie Token等替换为 `[已隐藏]`）
 
 ---
 
