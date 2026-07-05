@@ -2,12 +2,15 @@
 
 > **B站学习互动机器人** — 自动刷视频、学知识、互动评论、私信回复、自我进化  
 > 代码量: ~26,000+ 行 Python | 31 个模块文件  
-> 版本: 2.2.0 | License: MIT
+> 版本: 3.0.1 | License: MIT
 
 ---
-##声明
-此插件由其他开源项目改编使用（https://github.com/xiaoyaya191/bilibili_learning_bot/
-经原作者同意使用）
+
+## 声明
+
+此插件由其他开源项目改编使用（https://github.com/xiaoyaya191/bilibili_learning_bot/ 经原作者同意使用）
+
+---
 
 ## ✨ 功能特性
 
@@ -29,52 +32,7 @@
 | 🔄 **备用API降级** | 主API连续失败自动切换到备用提供商，10分钟后自动恢复 |
 | 📤 **隐私导出** | 一键导出配置（API Key/Cookie脱敏保护） |
 
-## 🧱 项目结构
-
-```
-├── new_agent.py          # 核心机器人 (~16,400行) AgentBrain + BiliClient
-├── web_panel.py          # Flask Web 管理面板
-├── psycho_engine.py      # 心理画像引擎 + 推荐系统
-├── json_utils.py         # 线程安全JSON存储 + 导出脱敏工具
-├── core/
-│   └── config.py         # 配置加载/保存
-├── services/
-│   ├── agent_service.py  # Agent技能执行器
-│   ├── interaction_service.py  # 互动服务
-│   ├── knowledge_tutor.py      # 知识辅导
-│   ├── managers.py       # 人格/心情/日记/进化管理器
-│   ├── reply_safety.py   # 回复安全审查
-│   └── utils.py          # 兴趣管理/工具函数
-├── xingye_bot/           # 模块化组件
-│   ├── asr_engine.py     # 语音识别引擎
-│   ├── kb_search.py      # 向量知识库检索
-│   ├── video_modes.py    # 视频理解模式
-│   ├── video_asr.py      # 视频ASR处理
-│   ├── diary.py          # 日记系统
-│   ├── evolution.py      # 自我进化
-│   ├── skills.py         # Agent技能
-│   ├── safety.py         # 安全过滤
-│   ├── llm.py            # LLM客户端
-│   ├── memory.py         # 语义记忆
-│   ├── state.py          # 状态管理
-│   ├── background.py     # 后台任务
-│   ├── bilibili_ops.py   # B站操作
-│   ├── owner.py          # 主人识别
-│   ├── proactive.py      # 主动行为
-│   ├── settings.py       # 设置
-│   └── web_search.py     # 网络搜索
-├── Data/                 # 运行时数据（自动生成）
-│   ├── config.json       # 配置文件
-│   ├── bilibili_cookies.json  # B站登录Cookie
-│   ├── mood_state.json   # 心情状态
-│   └── ...
-├── KnowledgeBase/        # 知识库目录
-│   ├── 知识收集/         # 待归档知识
-│   ├── 科技/             # 按3层分类归档
-│   ├── 自定义知识/       # 用户自定义知识
-│   └── ...
-└── config.example.json   # 配置模板
-```
+---
 
 ## 🚀 快速开始
 
@@ -82,9 +40,6 @@
 
 ```bash
 pip install -r requirements.txt
-# 推荐安装 ffmpeg（视频帧提取）
-# apt install ffmpeg    # Linux
-# pkg install ffmpeg    # Termux
 ```
 
 ### 2️⃣ 配置
@@ -119,6 +74,8 @@ bash start.sh
 3. 按 `V` 手动分析特定视频
 4. 按 `N` 管理自定义知识
 
+---
+
 ## 📋 主菜单功能速览
 
 | 按键 | 功能 |
@@ -147,11 +104,15 @@ bash start.sh
 | `I` | 📥 导入配置 |
 | `O` | 📂 一键整理知识库 |
 
+---
+
 ## 🔒 隐私安全
 
 - API Key 在菜单显示和导出时自动脱敏（`mask_secret` / `sanitize_config_for_export`）
 - 一键恢复出厂设置（`R`）清除所有配置/登录/日志/知识库
 - 导出备份自动隐藏敏感字段（API Key、Cookie Token等替换为 `[已隐藏]`）
+
+---
 
 ## 📝 二创说明（二次创作 / Fork）
 
@@ -170,6 +131,7 @@ bash start.sh
 - 如果做了有价值的改进，欢迎提 **Pull Request** 回馈上游
 - 可以在 README 致谢区加一句 
 - 作者的插件群 1079297679
+
 ### 简单理解
 
 > 💡 **你完全可以用我的代码做任何事（商用也行），唯一的要求是：让人知道你的项目是从我这来的。** 加一行链接即可。
@@ -181,4 +143,5 @@ bash start.sh
 本项目仅供学习参考。若因使用本项目产生任何后果，本人概不负责。
 
 ---
+
 *Based on [bilibili_learning_bot](https://github.com/xiaoyaya191/bilibili_learning_bot) · Original author: xiaoyaya191*
