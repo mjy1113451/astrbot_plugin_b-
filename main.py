@@ -12,7 +12,7 @@ from astrbot.api import logger
 
 # 导入原有模块
 from cli.app import (
-    _disclaimer_confirm, show_main_menu, show_mood_menu, show_config_menu,
+    _disclaimer_confirm, show_mood_menu, show_config_menu,
     show_login_menu, show_knowledge_base_menu, show_interest_menu,
     show_comment_menu, show_private_message_menu, show_diary_evolution_menu,
     show_agent_skill_menu, show_up_danmaku_menu, _configure_asr_settings,
@@ -28,6 +28,9 @@ from cli.app import (
     video_to_html_bg,
     show_interest_prefs_menu,
     show_coin_settings_menu,
+    show_learning_tools_menu,
+    show_mindmap_menu,
+    open_web_panel,
 )
 from brain.agent_brain import AgentBrain
 from brain.video_analysis import manual_video_analysis, up_homepage_learn
@@ -58,8 +61,12 @@ class BilibiliLearningBot(Star):
     @filter.command("bili_start")
     async def bili_start(self, event: AstrMessageEvent):
         """启动B站学习机器人（对应原菜单 1）"""
+        # 读取智能省token模式配置
+        _smart_cur = bool(config.get("system", {}).get("smart_token_mode", False))
+        _mode_label = "智能省token" if _smart_cur else "当前模式"
+        await event.send(event.plain_result(f"🤖 正在以【{_mode_label}】模式启动机器人..."))
+
         try:
-            await event.send(event.plain_result("🤖 正在启动机器人..."))
             await AgentBrain().run()
         except asyncio.CancelledError:
             await event.send(event.plain_result("⏹️ 机器人已停止"))
@@ -75,30 +82,40 @@ class BilibiliLearningBot(Star):
         _release_bot_lock()
         await event.send(event.plain_result("⏹️ 已发送停止信号"))
 
+    @filter.command("bili_mode")
+    async def bili_mode(self, event: AstrMessageEvent):
+        """切换启动模式：智能省token / 当前模式（对应原菜单 1 的模式选择）"""
+        _smart_cur = bool(config.get("system", {}).get("smart_token_mode", False))
+        _new_smart = not _smart_cur
+        config.setdefault("system", {})["smart_token_mode"] = _new_smart
+        if save_config(config):
+            _reload_all_globals(config)
+            _mode_label = "智能省token" if _new_smart else "当前模式"
+            await event.send(event.plain_result(f"✅ 启动模式已切换为: {_mode_label}"))
+        else:
+            await event.send(event.plain_result("❌ 配置保存失败"))
+
     # ========== 配置类指令 ==========
 
     @filter.command("bili_config")
     async def bili_config(self, event: AstrMessageEvent):
         """显示配置菜单（对应原菜单 2）"""
-        # 原有 show_config_menu 是交互式菜单，在聊天场景下需改造为返回文本
-        # 这里简化为返回当前配置摘要
         cfg_summary = f"""
 📋 **当前配置摘要**
 - ASR: {'启用' if config.get('asr', {}).get('enabled', False) else '禁用'}
 - 快速模式: {'开启' if config.get('speed', {}).get('no_human_delay', False) else '关闭'}
 - 封面分析: {'开启' if config.get('vision', {}).get('cover_enabled', False) else '关闭'}
 - 安静模式: {'开启' if config.get('system', {}).get('quiet_mode', False) else '关闭'}
+- 启动模式: {'智能省token' if config.get('system', {}).get('smart_token_mode', False) else '当前模式'}
         """
         await event.send(event.plain_result(cfg_summary))
 
     @filter.command("bili_login")
     async def bili_login(self, event: AstrMessageEvent):
         """登录B站（对应原菜单 3）"""
-        # show_login_menu 是交互式的，这里简化为触发登录流程
         await event.send(event.plain_result("🔐 正在打开登录页面，请按提示操作..."))
         try:
-            # 原 show_login_menu 可能需要异步改造
-            # 这里占位，实际需根据原有逻辑调整
+            show_login_menu()
             await event.send(event.plain_result("✅ 登录功能已触发（请查看控制台）"))
         except Exception as e:
             await event.send(event.plain_result(f"❌ 登录失败: {e}"))
@@ -109,8 +126,6 @@ class BilibiliLearningBot(Star):
     async def bili_kb(self, event: AstrMessageEvent):
         """知识库管理（对应原菜单 4）"""
         await event.send(event.plain_result("📚 知识库管理功能已触发（请查看控制台）"))
-        # 原 show_knowledge_base_menu 是交互式菜单
-        # 可考虑拆分为子指令: /bili_kb list, /bili_kb add, /bili_kb delete
 
     @filter.command("bili_revisit")
     async def bili_revisit(self, event: AstrMessageEvent):
@@ -141,14 +156,24 @@ class BilibiliLearningBot(Star):
         except Exception as e:
             await event.send(event.plain_result(f"❌ 操作失败: {e}"))
 
+    @filter.command("bili_tutor")
+    async def bili_tutor(self, event: AstrMessageEvent):
+        """知识辅导（对应原菜单 T）"""
+        await event.send(event.plain_result("🧑‍🏫 开始知识辅导..."))
+        try:
+            await show_knowledge_tutor_menu()
+            await event.send(event.plain_result("✅ 知识辅导完成"))
+        except Exception as e:
+            await event.send(event.plain_result(f"❌ 辅导失败: {e}"))
+
     # ========== 视频分析类指令 ==========
 
     @filter.command("bili_analyze")
     async def bili_analyze(self, event: AstrMessageEvent):
-        """手动视频分析（对应原菜单 V）"""
-        await event.send(event.plain_result("🔍 开始手动视频分析..."))
+        """手动B站视频分析（对应原菜单 V）"""
+        await event.send(event.plain_result("🔍 开始手动B站视频分析..."))
         try:
-            await manual_video_analysis()
+            await manual_video_analysis(force_platform="bilibili")
             await event.send(event.plain_result("✅ 视频分析完成"))
         except Exception as e:
             await event.send(event.plain_result(f"❌ 分析失败: {e}"))
@@ -187,6 +212,15 @@ class BilibiliLearningBot(Star):
             await event.send(event.plain_result(f"🎤 ASR语音识别: {state}"))
         else:
             await event.send(event.plain_result("❌ 配置保存失败"))
+
+    @filter.command("bili_asr_config")
+    async def bili_asr_config(self, event: AstrMessageEvent):
+        """ASR详细设置（对应原菜单 G）"""
+        _configure_asr_settings()
+        if save_config(config):
+            await event.send(event.plain_result("✅ ASR设置已保存"))
+        else:
+            await event.send(event.plain_result("❌ ASR设置保存失败"))
 
     @filter.command("bili_quick")
     async def bili_quick(self, event: AstrMessageEvent):
@@ -232,6 +266,15 @@ class BilibiliLearningBot(Star):
     async def bili_interest(self, event: AstrMessageEvent):
         """兴趣设置（对应原菜单 5）"""
         await event.send(event.plain_result("🎯 兴趣设置已触发（请查看控制台）"))
+
+    @filter.command("bili_interest_prefs")
+    async def bili_interest_prefs(self, event: AstrMessageEvent):
+        """兴趣偏好设置（对应原菜单 P）"""
+        try:
+            show_interest_prefs_menu()
+            await event.send(event.plain_result("✅ 兴趣偏好设置已触发（请查看控制台）"))
+        except Exception as e:
+            await event.send(event.plain_result(f"❌ 操作失败: {e}"))
 
     @filter.command("bili_comment")
     async def bili_comment(self, event: AstrMessageEvent):
@@ -296,6 +339,66 @@ class BilibiliLearningBot(Star):
         except Exception as e:
             await event.send(event.plain_result(f"❌ 查看任务失败: {e}"))
 
+    @filter.command("bili_dry_goods")
+    async def bili_dry_goods(self, event: AstrMessageEvent):
+        """干货设置（对应原菜单 D）"""
+        _configure_dry_goods_settings()
+        await event.send(event.plain_result("✅ 干货设置已触发（请查看控制台）"))
+
+    @filter.command("bili_standby")
+    async def bili_standby(self, event: AstrMessageEvent):
+        """待机设置（对应原菜单 L）"""
+        _configure_standby_settings()
+        await event.send(event.plain_result("✅ 待机设置已触发（请查看控制台）"))
+
+    @filter.command("bili_video_interval")
+    async def bili_video_interval(self, event: AstrMessageEvent):
+        """视频间隔设置（对应原菜单 Y）"""
+        _configure_video_interval_settings()
+        await event.send(event.plain_result("✅ 视频间隔设置已触发（请查看控制台）"))
+
+    @filter.command("bili_safety")
+    async def bili_safety(self, event: AstrMessageEvent):
+        """回复安全设置（对应原菜单 S）"""
+        show_reply_safety_menu()
+        await event.send(event.plain_result("✅ 回复安全设置已触发（请查看控制台）"))
+
+    @filter.command("bili_coin")
+    async def bili_coin(self, event: AstrMessageEvent):
+        """投币设置（对应原菜单 X）"""
+        try:
+            show_coin_settings_menu()
+            await event.send(event.plain_result("✅ 投币设置已触发（请查看控制台）"))
+        except Exception as e:
+            await event.send(event.plain_result(f"❌ 操作失败: {e}"))
+
+    @filter.command("bili_learning_tools")
+    async def bili_learning_tools(self, event: AstrMessageEvent):
+        """学习工具（对应原菜单 J）"""
+        try:
+            show_learning_tools_menu()
+            await event.send(event.plain_result("✅ 学习工具已触发（请查看控制台）"))
+        except Exception as e:
+            await event.send(event.plain_result(f"❌ 操作失败: {e}"))
+
+    @filter.command("bili_mindmap")
+    async def bili_mindmap(self, event: AstrMessageEvent):
+        """思维导图（对应原菜单 MM）"""
+        try:
+            show_mindmap_menu()
+            await event.send(event.plain_result("✅ 思维导图已触发（请查看控制台）"))
+        except Exception as e:
+            await event.send(event.plain_result(f"❌ 操作失败: {e}"))
+
+    @filter.command("bili_web_panel")
+    async def bili_web_panel(self, event: AstrMessageEvent):
+        """打开网页端（对应原菜单 WB）"""
+        try:
+            open_web_panel()
+            await event.send(event.plain_result("✅ 网页端已打开（请查看浏览器）"))
+        except Exception as e:
+            await event.send(event.plain_result(f"❌ 操作失败: {e}"))
+
     @filter.command("bili_help")
     async def bili_help(self, event: AstrMessageEvent):
         """显示所有可用指令"""
@@ -305,11 +408,13 @@ class BilibiliLearningBot(Star):
 **核心指令**
 - `/bili_start` - 启动机器人
 - `/bili_stop` - 停止机器人
+- `/bili_mode` - 切换启动模式（智能省token/当前模式）
 
 **配置类**
 - `/bili_config` - 查看配置
 - `/bili_login` - 登录B站
 - `/bili_asr` - 切换ASR
+- `/bili_asr_config` - ASR详细设置
 - `/bili_quick` - 切换快速模式
 - `/bili_quiet` - 切换安静模式
 - `/bili_cover` - 切换封面分析
@@ -319,14 +424,16 @@ class BilibiliLearningBot(Star):
 - `/bili_revisit` - 重温知识库
 - `/bili_organize` - 整理知识库
 - `/bili_custom_kb` - 自定义知识
+- `/bili_tutor` - 知识辅导
 
 **视频分析类**
-- `/bili_analyze` - 手动视频分析
+- `/bili_analyze` - 手动B站视频分析
 - `/bili_up_learn` - UP主主页学习
 - `/bili_video2html` - 视频转HTML
 
 **其他**
 - `/bili_interest` - 兴趣设置
+- `/bili_interest_prefs` - 兴趣偏好设置
 - `/bili_comment` - 评论管理
 - `/bili_pm` - 私信管理
 - `/bili_diary` - 日记进化
@@ -338,6 +445,14 @@ class BilibiliLearningBot(Star):
 - `/bili_import` - 导入配置
 - `/bili_reset` - 恢复出厂设置
 - `/bili_tasks` - 查看后台任务
+- `/bili_dry_goods` - 干货设置
+- `/bili_standby` - 待机设置
+- `/bili_video_interval` - 视频间隔设置
+- `/bili_safety` - 回复安全设置
+- `/bili_coin` - 投币设置
+- `/bili_learning_tools` - 学习工具
+- `/bili_mindmap` - 思维导图
+- `/bili_web_panel` - 打开网页端
 - `/bili_help` - 显示本帮助
         """
         await event.send(event.plain_result(help_text))
