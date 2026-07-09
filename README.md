@@ -150,48 +150,6 @@ pip install -r requirements.txt
 # pip install yt-dlp
 ```
 
-### 2️⃣ 配置
-
-```bash
-cp config.example.json Data/config.json
-# 编辑 Data/config.json 填入你的 API Key（统一API或OpenAI兼容接口）
-# Web 面板默认禁止分析本地文件路径；确需开启时设置 platform_adapter.allow_web_local_files=true
-```
-
-### 3️⃣ 启动
-
-**交互式菜单**:
-```bash
-python3 main.py
-```
-
-**Web管理面板**:
-```bash
-python3 web_panel.py
-# 访问 http://localhost:7860
-# 包含: 仪表盘 / 机器人控制 / 实时监听 / 配置编辑 / 知识辅导 等页面
-```
-
-**Docker 部署**:
-```bash
-docker-compose up -d
-# 访问 http://localhost:8080
-```
-
-**Termux (Android) 一键启动**:
-```bash
-bash start.sh
-```
-
-### 4️⃣ 首次使用
-
-1. 进入菜单后按 `3` 配置 B站登录（扫码或 Cookie）
-2. 按 `1` 启动机器人自动刷视频
-3. 按 `V` 手动分析特定视频（BV号 / B站链接 / 视频标题 / UP主名）
-4. 按 `W` 将已学视频生成 HTML 网页
-5. 按 `N` 管理自定义知识
-
-## 📋 主菜单功能速览
 
 | 按键 | 功能 |
 |------|------|
