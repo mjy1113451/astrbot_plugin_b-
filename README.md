@@ -5,6 +5,8 @@
 > 项目介绍以及使用文档: https://bot1.bxya.top/
 
 ---
+##声明
+此astrbot插件项目由https://github.com/xiaoyaya191/bilibili_learning_bot/提供，经作者允许后使用。
 
 ## ✨ 功能特性
 
