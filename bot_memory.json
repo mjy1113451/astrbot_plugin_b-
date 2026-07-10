@@ -1,0 +1,45 @@
+{
+  "known_ups": {
+    "视觉暴徒": {
+      "uid": 416886614,
+      "favorited": false,
+      "followed": false,
+      "views": 1,
+      "total_score": 7.1,
+      "avg_score": 7.1,
+      "first_seen": "2026-07-07T18:29:07.731236",
+      "last_viewed_at": "2026-07-07T18:29:07.731242"
+    },
+    "三三音乐LAB": {
+      "uid": 32774878,
+      "favorited": false,
+      "followed": false,
+      "views": 2,
+      "total_score": 17.2,
+      "avg_score": 8.6,
+      "first_seen": "2026-07-07T18:30:44.696187",
+      "last_viewed_at": "2026-07-07T18:35:22.170550"
+    },
+    "虾仁不眨眼-游戏直播": {
+      "uid": 3546581982775788,
+      "favorited": false,
+      "followed": false,
+      "views": 1,
+      "total_score": 6.8,
+      "avg_score": 6.8,
+      "first_seen": "2026-07-07T18:31:54.920389",
+      "last_viewed_at": "2026-07-07T18:31:54.920395"
+    },
+    "oooooohmygosh": {
+      "uid": 38053181,
+      "favorited": false,
+      "followed": false,
+      "views": 1,
+      "total_score": 5.2,
+      "avg_score": 5.2,
+      "first_seen": "2026-07-07T18:32:50.381228",
+      "last_viewed_at": "2026-07-07T18:32:50.381236"
+    }
+  },
+  "history": []
+}

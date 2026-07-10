@@ -1,0 +1,30 @@
+{
+  "version": "2.0",
+  "interests": [],
+  "negative_keywords": [],
+  "synonym_map": {},
+  "settings": {
+    "proxy_mode": "smart",
+    "serendipity_rate": 0.1,
+    "auto_sync_psycho": true,
+    "use_synonyms": true,
+    "ai_suggest": true,
+    "ai_suggest_interval": 20,
+    "scoring": {
+      "enabled": true,
+      "weights": {
+        "relevance": 0.4,
+        "novelty": 0.2,
+        "diversity": 0.15,
+        "quality": 0.25
+      },
+      "dynamic_threshold": true,
+      "threshold_base": 6.0,
+      "threshold_min": 4.5,
+      "threshold_max": 7.5
+    }
+  },
+  "history_tags": [],
+  "videos_watched_count": 3,
+  "updated_at": "2026-07-07T18:31:57.214563"
+}
