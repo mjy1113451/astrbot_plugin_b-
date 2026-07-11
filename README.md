@@ -138,20 +138,6 @@
 > 正确的包名是 **`bilibili-api-python`**，现已修复为 `>=17.4.1`。  
 > **给大家带来困扰，非常抱歉！** 🙇
 
-```bash
-pip install -r requirements.txt
-
-# 如果之前装过旧包，先卸载：
-# pip uninstall bilibili-api -y
-
-# 推荐安装 ffmpeg（视频帧提取）
-# apt install ffmpeg    # Linux
-# pkg install ffmpeg    # Termux
-
-# 可选安装 yt-dlp（历史用于非 B站平台；多平台支持已移除，通常无需安装）
-# pip install yt-dlp
-```
-
 
 | 按键 | 功能 |
 |------|------|
@@ -224,13 +210,6 @@ pip install -r requirements.txt
 ### 知识库能做什么？
 
 可以自动三层分类归档、搜索、预览、AI 讲解、问答、改写、生成 HTML 学习卡片，并支持单篇/批量导出思维导图。
-
-## 🔒 隐私安全
-
-- API Key 在菜单显示和导出时自动脱敏（`mask_secret` / `sanitize_config_for_export`）
-- 一键恢复出厂设置（`R` → `YES`）清空全部隐私数据：配置/登录/状态/日志/记忆/心理画像/网页面板/知识库/导出/备份/加密密钥
-- 导出备份自动隐藏敏感字段（API Key、Cookie Token等替换为 `[已隐藏]`）
-- 所有配置文件和 Cookie 仅本地存储，不上传到任何服务器
 
 ## ⚠️ 免责声明
 
