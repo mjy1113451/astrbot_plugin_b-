@@ -61,7 +61,6 @@ class BilibiliLearningBot(Star):
     @filter.command("bili_start")
     async def bili_start(self, event: AstrMessageEvent):
         """启动B站学习机器人（对应原菜单 1）"""
-        # 读取智能省token模式配置
         _smart_cur = bool(config.get("system", {}).get("smart_token_mode", False))
         _mode_label = "智能省token" if _smart_cur else "当前模式"
         await event.send(event.plain_result(f"🤖 正在以【{_mode_label}】模式启动机器人..."))
@@ -84,7 +83,7 @@ class BilibiliLearningBot(Star):
 
     @filter.command("bili_mode")
     async def bili_mode(self, event: AstrMessageEvent):
-        """切换启动模式：智能省token / 当前模式（对应原菜单 1 的模式选择）"""
+        """切换启动模式：智能省token / 当前模式"""
         _smart_cur = bool(config.get("system", {}).get("smart_token_mode", False))
         _new_smart = not _smart_cur
         config.setdefault("system", {})["smart_token_mode"] = _new_smart
@@ -105,9 +104,9 @@ class BilibiliLearningBot(Star):
 - ASR: {'启用' if config.get('asr', {}).get('enabled', False) else '禁用'}
 - 快速模式: {'开启' if config.get('speed', {}).get('no_human_delay', False) else '关闭'}
 - 封面分析: {'开启' if config.get('vision', {}).get('cover_enabled', False) else '关闭'}
-- 安静模式: {'开启' if config.get('system', {}).get('quiet_mode', False) else '关闭'}
+- 安静模式: {'开启' if config.get('system', {}).get("quiet_mode", False) else '关闭'}
 - 启动模式: {'智能省token' if config.get('system', {}).get('smart_token_mode', False) else '当前模式'}
-        """
+"""
         await event.send(event.plain_result(cfg_summary))
 
     @filter.command("bili_login")
@@ -454,5 +453,5 @@ class BilibiliLearningBot(Star):
 - `/bili_mindmap` - 思维导图
 - `/bili_web_panel` - 打开网页端
 - `/bili_help` - 显示本帮助
-        """
+"""
         await event.send(event.plain_result(help_text))
