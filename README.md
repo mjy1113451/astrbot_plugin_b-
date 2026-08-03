@@ -87,30 +87,6 @@
 
 ---
 
-## 🚀 快速开始
-
-### 1️⃣ 安装依赖
-
-```bash
-pip install -r requirements.txt
-
-# 推荐安装 ffmpeg（视频帧提取）
-# apt install ffmpeg        # Linux
-# pkg install ffmpeg        # Termux
-```
-
-> ⚠️ B站 API 包名是 **`bilibili-api-python`**（不是 `bilibili-api`）。若之前装过旧包：
-> ```bash
-> pip uninstall bilibili-api -y
-> ```
-
-### 2️⃣ 配置
-
-```bash
-cp config.example.json Data/config.json   # 源码运行
-# 编辑填入 API Key（统一 API 或任意 OpenAI 兼容端点）
-```
-
 > Web/EXE 版会自动在 `%LOCALAPPDATA%\BiliLearn` 创建数据目录，无需手动复制。
 
 ### 3️⃣ 启动
@@ -122,39 +98,6 @@ cp config.example.json Data/config.json   # 源码运行
 | **Windows EXE** | 运行 `BiliLearn Web.exe`（自动开浏览器 + 托盘） |
 | **Docker** | `docker-compose up -d` |
 | **Termux** | `bash start.sh` |
-
-### 4️⃣ 首次使用
-
-1. 网页面板「B站登录」扫码登录
-2. 「机器人控制」→ 启动机器人（自动刷视频）
-3. 「人格管理」配置 AI 人格
-4. 或 CLI：`python main.py` → 按 `3` 登录 → 按 `1` 启动
-
----
-
-## 📦 Windows EXE 打包教程
-
-项目已内置完整的 PyInstaller 配置，**无需手写命令行**：
-
-### 前置条件
-
-```bash
-pip install pyinstaller
-```
-
-### 一键打包
-
-双击运行（或命令行执行）：
-
-```bat
-build_windows_exe.bat
-```
-
-等价命令：
-
-```bash
-python -m PyInstaller --noconfirm --clean BiliLearn.spec
-```
 
 产物：`dist/BiliLearn Web/BiliLearn Web.exe`（绿色免安装，复制整个文件夹即可分发）。
 
