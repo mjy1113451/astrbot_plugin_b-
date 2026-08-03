@@ -23,9 +23,13 @@ from datetime import datetime
 from colorama import Fore, Style
 
 BASE_DIR = Path(__file__).resolve().parent.parent
-DATA_DIR = BASE_DIR / "Data"
-KNOWLEDGE_BASE_DIR = BASE_DIR / "KnowledgeBase"
-QUIZ_EXPORT_DIR = BASE_DIR / "html_exports" / "quizzes"
+from core.user_data import DATA_DIR, HTML_EXPORTS_DIR
+from core.config import config as _core_config, resolve_knowledge_base_dir
+
+KNOWLEDGE_BASE_DIR = Path(resolve_knowledge_base_dir(_core_config))
+
+QUIZ_EXPORT_DIR = HTML_EXPORTS_DIR / "quizzes"
+
 
 # ── 默认提示词模板 ──
 QUIZ_SYSTEM_PROMPTS = {
@@ -211,7 +215,7 @@ async def generate_quiz(
 
     live = _live_config()
     if not live.get("api_key"):
-        result["error"] = "API 未配置，请在 Data/config.json 中设置 unified_api_key"
+        result["error"] = "API 未配置，请在用户数据目录的 config.json 中设置 unified_api_key"
         return result
 
     # ── Step 1: 获取内容 ──

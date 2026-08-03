@@ -18,6 +18,14 @@ from datetime import datetime
 from pathlib import Path as _Path
 
 from brain._mixin_imports import *
+from api.subtitles import _check_subtitle_mismatch
+
+
+def _hidden_process_kwargs():
+    """Keep ffmpeg helpers invisible when the bot runs on Windows."""
+    import subprocess
+    flags = getattr(subprocess, "CREATE_NO_WINDOW", 0)
+    return {"creationflags": flags} if flags else {}
 
 
 class BrainVideoMixin:
@@ -85,6 +93,7 @@ class BrainVideoMixin:
         video_category = getattr(self, "_current_video_category", "") or ""
         video_duration = getattr(self, "_current_video_duration", 0) or 0
         cover_desc = getattr(self, "_current_video_cover_desc", "") or ""
+        subtitle_rejected = False
 
         # [force_mode] subtitle_only → 拿完字幕直接返回
         if force_mode == "subtitle_only":
@@ -120,8 +129,24 @@ class BrainVideoMixin:
             )
             if subtitle_sufficient:
                 log(f"[OK] AI判断字幕充分: {sufficiency_reason} | 无需下载视频", "BRAIN")
+                vision_config = config.get("vision", {}) or {}
+                analyze_frames = (
+                    do_vision
+                    and bool(vision_config.get("frames_enabled", True))
+                    and bool(vision_config.get("analyze_frames_with_sufficient_subtitles", False))
+                    and not self._is_vision_globally_disabled()
+                )
+                if analyze_frames:
+                    log("[EYE] 字幕充分，但已启用画面补充分析；开始下载并抽帧", "EYE")
+                    vision_text = await self._understand_with_vision_frames(bvid, title, subtitle_text)
+                    if vision_text:
+                        return True, f"【CC字幕】\n{subtitle_text}\n\n【视觉画面理解】\n{vision_text}"
+                    log("[EYE] 画面补充分析未得到结果，继续使用字幕", "WARN")
+                elif do_vision and bool(vision_config.get("frames_enabled", True)) and not self._is_vision_globally_disabled():
+                    log("[EYE] 字幕充分，智能流程未抽帧；可在视觉设置开启“字幕充分时仍分析画面”", "EYE")
                 return True, subtitle_text
             else:
+                subtitle_rejected = True
                 # [FIX] 快速预检：如果字幕主要是音乐符号/纯噪声，直接兜底，不浪费下载视频
                 if self._is_music_only_subtitle(subtitle_text):
                     log(f"[WARN] 字幕以音乐标记为主，跳过视频下载，直接使用字幕兜底", "BRAIN")
@@ -140,32 +165,39 @@ class BrainVideoMixin:
                 vis_fallback = await self._understand_with_vision_frames(bvid, title, subtitle_text)
                 if vis_fallback:
                     return True, vis_fallback
-            if has_subtitle:
+            if has_subtitle and not subtitle_rejected:
                 return True, subtitle_text
-            return False, content or f"[{reason}]"
+            return False, f"[视频理解不足: {reason}; 字幕已判定无关，未启用 ASR/视觉理解]"
 
         # ═══ 第四步：规则快速过滤（纯音乐/游戏集锦等确定无人声的跳过ASR） ═══
-        from xingye_bot.asr_engine import ASREngine
-        skip, skip_reason = ASREngine.should_skip_asr(
-            title=title or "",
-            tags=video_tags,
-            category=video_category,
-            cover_desc=cover_desc,
-            duration=video_duration,
-        )
-        if skip:
-            log(f"🤖 规则预判跳过ASR: {skip_reason}", "BRAIN")
-            if has_subtitle:
-                is_all_failed = "轮重试均失败" in subtitle_text or "所有轨校验均失败" in subtitle_text
-                if not is_all_failed:
-                    return True, subtitle_text
-                log(f"[WARN] 规则跳过ASR但字幕所有轨校验失败或AI判定不相关，尝试视觉帧理解", "BRAIN")
-            # 规则明确跳过（纯音乐等）→ 视觉帧理解兜底
-            if do_vision:
-                vis_fallback = await self._understand_with_vision_frames(bvid, title, subtitle_text)
-                if vis_fallback:
-                    return True, vis_fallback
-            return False, f"{content} | [ASR跳过: {skip_reason}]"
+        ASREngine = None
+        try:
+            from xingye_bot.asr_engine import ASREngine
+        except ImportError:
+            pass
+        if ASREngine is not None:
+            skip, skip_reason = ASREngine.should_skip_asr(
+                title=title or "",
+                tags=video_tags,
+                category=video_category,
+                cover_desc=cover_desc,
+                duration=video_duration,
+            )
+            if skip:
+                log(f"🤖 规则预判跳过ASR: {skip_reason}", "BRAIN")
+                if has_subtitle:
+                    is_all_failed = "轮重试均失败" in subtitle_text or "所有轨校验均失败" in subtitle_text
+                    if not is_all_failed:
+                        return True, subtitle_text
+                    log(f"[WARN] 规则跳过ASR但字幕所有轨校验失败或AI判定不相关，尝试视觉帧理解", "BRAIN")
+                # 规则明确跳过（纯音乐等）→ 视觉帧理解兜底
+                if do_vision:
+                    vis_fallback = await self._understand_with_vision_frames(bvid, title, subtitle_text)
+                    if vis_fallback:
+                        return True, vis_fallback
+                return False, f"{content} | [ASR跳过: {skip_reason}]"
+        else:
+            log("⚠️ xingye_bot.asr_engine 未安装，跳过规则过滤", "WARN")
 
         # ═══ 第五步：下载视频 → 同时ASR + 抽关键帧 → 合并分析 ═══
         # 一次下载获得语音+画面双重信息，更准确高效
@@ -183,7 +215,8 @@ class BrainVideoMixin:
             asr = get_asr_engine(asr_cfg)
 
             # 下载视频（只下载一次）
-            download_result = await self._download_video_for_asr(bvid)
+            download_label = "ASR+视觉下载" if do_asr else "视觉抽帧下载"
+            download_result = await self._download_video_for_asr(bvid, log_label=download_label)
             video_path_str, download_sec, download_size_mb = download_result
             if not video_path_str:
                 log(f"[{mode_desc}] 视频下载失败(耗时{download_sec:.1f}s)", "WARN")
@@ -221,7 +254,7 @@ class BrainVideoMixin:
             
             # 同时抽关键帧（复用已下载的视频，不再单独下载）
             vision_task = None
-            if do_vision and VISION_FRAMES_ENABLED and should_extract:
+            if do_vision and VISION_FRAMES_ENABLED and should_extract and not self._is_vision_globally_disabled():
                 vision_task = asyncio.create_task(self._extract_and_analyze_frames(
                     video_path, bvid, title, subtitle_text, frame_count=smart_frame_count
                 ))
@@ -264,7 +297,9 @@ class BrainVideoMixin:
                 # 汇总全流程耗时到 ASR result
                 asr_result.timing["total_elapsed_seconds"] = round(_full_time.time() - _full_start, 2)
                 timing_summary = ASREngine.timing_summary(asr_result, download_sec=download_sec, download_size_mb=download_size_mb)
-                print(timing_summary)
+                # Keep timing in the unified runtime log as well as stdout so
+                # the CLI, web panel and exported diagnostic logs agree.
+                log(timing_summary, "INFO")
             
             # --- 合并结果 ---
             # 构建最终理解文本
@@ -315,7 +350,10 @@ class BrainVideoMixin:
         """[VISION v2] 从已下载的视频文件抽帧→视觉AI分析→返回画面描述。
         与 _understand_with_vision_frames 的区别：不重新下载视频，直接使用已有文件。
         frame_count: AI智能决定的抽帧数量，None则使用默认VISION_FRAME_COUNT"""
-        if not VISION_FRAMES_ENABLED:
+        if not (config.get("vision", {}) or {}).get("frames_enabled", True):
+            return None
+        # 全局不识图守卫：封面分析+评论图片分析都关 → 帧分析也跳过
+        if self._is_vision_globally_disabled():
             return None
         # 使用AI决定的帧数，否则用默认值
         actual_frame_count = frame_count if frame_count and frame_count > 0 else VISION_FRAME_COUNT
@@ -340,7 +378,7 @@ class BrainVideoMixin:
                 try:
                     dur_out = _sp.run([ffprobe, "-v", "error", "-show_entries", "format=duration",
                         "-of", "default=noprint_wrappers=1:nokey=1", str(video_path)],
-                        capture_output=True, text=True, timeout=15)
+                        capture_output=True, text=True, timeout=15, **_hidden_process_kwargs())
                     duration = int(float(dur_out.stdout.strip())) if dur_out.stdout.strip() else 0
                 except Exception:
                     duration = 0
@@ -349,7 +387,7 @@ class BrainVideoMixin:
             if duration <= 0 and ffmpeg:
                 try:
                     dur_out2 = _sp.run([ffmpeg, "-i", str(video_path), "-f", "null", "-"],
-                        capture_output=True, text=True, timeout=30)
+                        capture_output=True, text=True, timeout=30, **_hidden_process_kwargs())
                     import re as _re
                     dm = _re.search(r"Duration:\s*(\d+):(\d+):(\d+)\.(\d+)", dur_out2.stderr)
                     if dm:
@@ -362,15 +400,17 @@ class BrainVideoMixin:
                 log("[EYE] ffmpeg 未找到，无法抽帧", "WARN")
                 return None
             
-            # ── BiliNote 式图文笔记逻辑（默认 frame_anchor_mode=bilinote）──
-            frame_anchor_mode = (config.get("video", {}) or {}).get("frame_anchor_mode", "bilinote")
-            if frame_anchor_mode == "bilinote":
+            # ── 图文学习笔记逻辑（默认 frame_note_mode=visual_note）──
+            frame_note_mode = (config.get("video", {}) or {}).get("frame_note_mode", "visual_note")
+            if frame_note_mode == "visual_note":
                 try:
                     from xingye_bot.grid_frames import (
-                        extract_grid_frames, grid_images_to_base64,
-                        replace_markers_with_screenshots, bilinote_prompt_suffix,
+                        extract_visual_note_grids, grid_images_to_base64,
+                        replace_markers_with_screenshots, visual_note_prompt_suffix,
                     )
-                    grid_imgs = extract_grid_frames(video_path)
+                    grid_imgs = extract_visual_note_grids(
+                        video_path, (config.get("video", {}) or {})
+                    )
                     if grid_imgs:
                         grid_b64 = grid_images_to_base64(grid_imgs)
                         text = (
@@ -378,7 +418,7 @@ class BrainVideoMixin:
                             f"{'、字幕' if subtitle_text else ''}理解视频。\n"
                             f"标题: {title or '未知'}\n"
                             f"{'【参考字幕】: ' + subtitle_text[:1500] if subtitle_text else ''}\n"
-                            + bilinote_prompt_suffix()
+                            + visual_note_prompt_suffix()
                         )
                         content_blocks = [{"type": "text", "text": text}]
                         for b in grid_b64:
@@ -396,7 +436,7 @@ class BrainVideoMixin:
                         return md
                     log("[EYE] 网格抽帧为空，回退经典视觉理解", "WARN")
                 except Exception as e:
-                    log(f"[EYE] BiliNote 图文笔记生成失败，回退经典视觉理解: {e}", "WARN")
+                    log(f"[EYE] 图文学习笔记生成失败，回退经典视觉理解: {e}", "WARN")
 
             # [SMART_FRAME] 经典视觉理解（legacy）
             if duration and duration > 0:
@@ -409,7 +449,7 @@ class BrainVideoMixin:
             ffmpeg_result = _sp.run([ffmpeg, "-hide_banner", "-loglevel", "error", "-y",
                 "-i", str(video_path), "-vf", vf_filter,
                 "-vsync", "vfr", pattern],
-                timeout=120, capture_output=True, text=True)
+                timeout=120, capture_output=True, text=True, **_hidden_process_kwargs())
             
             if ffmpeg_result.returncode != 0:
                 log(f"[EYE] ffmpeg 抽帧失败 (rc={ffmpeg_result.returncode}): {ffmpeg_result.stderr.strip()[-200:]}", "ERROR")
@@ -548,16 +588,78 @@ class BrainVideoMixin:
             log(f"[SMART_FRAME] AI决策异常: {e}", "WARN")
             return True, VISION_FRAME_COUNT, f"异常回退: {e}"
 
+    async def _analyze_timeline_grids(self, video_path, title=None, subtitle_text=""):
+        """Send timestamped 3x3 timeline grids to the vision model as one visual context."""
+        if self._is_vision_globally_disabled():
+            return None
+        frame_note_mode = (config.get("video", {}) or {}).get("frame_note_mode", "visual_note")
+        if frame_note_mode != "visual_note":
+            return None
+
+        try:
+            from xingye_bot.grid_frames import (
+                extract_visual_note_grids, grid_images_to_base64,
+                replace_markers_with_screenshots, visual_note_prompt_suffix,
+            )
+
+            grid_images = extract_visual_note_grids(
+                video_path, (config.get("video", {}) or {}))
+            if not grid_images:
+                log("[EYE] 时间轴网格为空，回退经典视觉分析", "WARN")
+                return None
+
+            grid_data_urls = grid_images_to_base64(grid_images)
+            log(
+                f"[EYE] 时间轴网格已生成: {len(grid_data_urls)} 张网格图，"
+                "每张最多 9 帧并标记右下角时间，正在一次性发送视觉 AI...",
+                "EYE",
+            )
+            prompt = (
+                "请根据视频时间轴网格生成一份可追溯的图文学习笔记。每个小格右下角的 mm:ss "
+                "是该画面的真实时间，只能引用网格中实际出现的时间。\n"
+                f"标题: {title or '未知'}\n"
+                f"{'【参考字幕】: ' + subtitle_text[:1500] if subtitle_text else '【参考字幕】: 无'}\n"
+                + visual_note_prompt_suffix()
+            )
+            content = [{"type": "text", "text": prompt}]
+            content.extend(
+                {"type": "image_url", "image_url": {"url": data_url}}
+                for data_url in grid_data_urls
+            )
+            response = await self._call_ai_with_retry(
+                model=MODEL_VISION,
+                messages=[
+                    {
+                        "role": "system",
+                        "content": "你是视频图文笔记助手。基于时间轴画面和原始字幕组织内容，"
+                                   "不要把推断写成画面事实。",
+                    },
+                    {"role": "user", "content": content},
+                ],
+                request_timeout=180,
+            )
+            markdown = response.choices[0].message.content.strip()
+            markdown, screenshots = replace_markers_with_screenshots(
+                markdown, video_path, inline=True)
+            log(f"[EYE] 时间轴网格分析完成，已回填 {screenshots} 张精确截图", "SUCCESS")
+            return markdown
+        except Exception as error:
+            log(f"[EYE] 时间轴网格分析异常，回退经典视觉分析: {error}", "WARN")
+            return None
+
     async def _understand_with_vision_frames(self, bvid, title=None, subtitle_text=""):
         """[VISION] 下载视频→抽帧→视觉AI理解→返回画面描述（ASR/字幕都不可用时的兜底方案）"""
-        if not VISION_FRAMES_ENABLED:
+        if not (config.get("vision", {}) or {}).get("frames_enabled", True):
+            return None
+        # 全局不识图守卫
+        if self._is_vision_globally_disabled():
             return None
         log(f"[EYE] 尝试视觉帧理解: 《{title or bvid}》", "EYE")
         video_path = None
         frames = []
         try:
             # 1. 下载视频
-            dl_result = await self._download_video_for_asr(bvid)
+            dl_result = await self._download_video_for_asr(bvid, log_label="视觉抽帧下载")
             video_path_str, _, _ = dl_result  # 解包新返回格式
             if not video_path_str:
                 log(f"[EYE] 视觉理解: 视频下载失败", "WARN")
@@ -594,19 +696,27 @@ class BrainVideoMixin:
                 try:
                     dur_out = _sp.run([ffprobe, "-v", "error", "-show_entries", "format=duration",
                         "-of", "default=noprint_wrappers=1:nokey=1", str(video_path)],
-                        capture_output=True, text=True, timeout=15)
+                        capture_output=True, text=True, timeout=15, **_hidden_process_kwargs())
                     duration = int(float(dur_out.stdout.strip())) if dur_out.stdout.strip() else 0
                 except Exception:
                     duration = 0
             if not ffmpeg:
                 log(f"[EYE] 视觉理解: ffmpeg 未安装，无法抽帧", "WARN")
                 return None
+
+            timeline_note = await self._analyze_timeline_grids(
+                video_path, title=title, subtitle_text=subtitle_text)
+            if timeline_note:
+                return f"【时间轴视觉理解】\n{timeline_note}"
+
             interval = max(1, duration // max(1, actual_frame_count)) if duration else 5
             pattern = str(frames_dir / "frame_%03d.jpg")
-            _sp.run([ffmpeg, "-hide_banner", "-loglevel", "error", "-y",
+            ffmpeg_result = _sp.run([ffmpeg, "-hide_banner", "-loglevel", "error", "-y",
                 "-i", str(video_path), "-vf", f"fps=1/{interval},scale=640:-1",
                 "-frames:v", str(actual_frame_count), pattern],
-                timeout=120, capture_output=True)
+                timeout=120, capture_output=True, **_hidden_process_kwargs())
+            if ffmpeg_result.returncode != 0:
+                log(f"[EYE] 视觉理解: ffmpeg 抽帧失败 (rc={ffmpeg_result.returncode}): {ffmpeg_result.stderr.decode(errors='replace')[-200:]}", "ERROR")
             frames = sorted(frames_dir.glob("frame_*.jpg"))
             if not frames:
                 log(f"[EYE] 视觉理解: 抽帧失败 (无输出文件)", "WARN")
@@ -949,7 +1059,7 @@ class BrainVideoMixin:
         else:
             log(f"📚 知识库审查完成: 抽查 {sample_size} 个条目全部通过", "KB")
 
-    async def _download_video_for_asr(self, bvid):
+    async def _download_video_for_asr(self, bvid, log_label="ASR下载"):
         """DASH 模式下载视频（音视频分离 + ffmpeg 合并），确保有声音。
         返回 (视频路径, 下载耗时秒, 文件大小MB)
         无 ffmpeg 时回退到 FLV 一体流。"""
@@ -989,7 +1099,7 @@ class BrainVideoMixin:
                                 except Exception:
                                     pass
                 except Exception as e:
-                    log(f"[WARN] ASR下载WBI密钥获取失败: {e}", "WARN")
+                    log(f"[WARN] {log_label} WBI密钥获取失败: {e}", "WARN")
 
                 def _sign(params_dict):
                     if not wkeys:
@@ -1057,13 +1167,13 @@ class BrainVideoMixin:
                                         "-i", video_tmp, "-i", audio_tmp,
                                         "-c:v", "copy", "-c:a", "aac", "-b:a", "192k",
                                         "-movflags", "+faststart", out_path,
-                                    ], capture_output=True, text=True)
+                                    ], capture_output=True, text=True, **_hidden_process_kwargs())
                                     if result.returncode != 0:
                                         _sp.run([
                                             ffmpeg, "-y", "-hide_banner", "-loglevel", "error",
                                             "-i", video_tmp, "-i", audio_tmp,
                                             "-c", "copy", "-movflags", "+faststart", out_path,
-                                        ], check=True, capture_output=True)
+                                        ], check=True, capture_output=True, **_hidden_process_kwargs())
                                 finally:
                                     # 清理临时文件
                                     if os.path.exists(video_tmp):
@@ -1073,10 +1183,10 @@ class BrainVideoMixin:
 
                                 file_size_mb = os.path.getsize(out_path) / (1024 * 1024) if os.path.exists(out_path) else 0
                                 download_sec = _t2.time() - _dl_start
-                                log(f"[ASR下载(DASH)] 耗时 {download_sec:.1f}s, 大小 {file_size_mb:.1f}MB", "DEBUG")
+                                log(f"[{log_label}(DASH)] 耗时 {download_sec:.1f}s, 大小 {file_size_mb:.1f}MB", "DEBUG")
                                 return out_path, download_sec, file_size_mb
                     except Exception as e:
-                        log(f"[ASR下载] DASH模式失败，回退FLV: {e}", "DEBUG")
+                        log(f"[{log_label}] DASH模式失败，回退FLV: {e}", "DEBUG")
 
                 # ── 方案B: FLV 单流回退（无需 ffmpeg，音视频一体）──
                 play_params = _sign({
@@ -1101,9 +1211,9 @@ class BrainVideoMixin:
 
                 file_size_mb = os.path.getsize(out_path) / (1024 * 1024) if os.path.exists(out_path) else 0
                 download_sec = _t2.time() - _dl_start
-                log(f"[ASR下载(FLV)] 耗时 {download_sec:.1f}s, 文件大小 {file_size_mb:.1f}MB", "DEBUG")
+                log(f"[{log_label}(FLV)] 耗时 {download_sec:.1f}s, 文件大小 {file_size_mb:.1f}MB", "DEBUG")
                 return out_path, download_sec, file_size_mb
         except Exception as e:
             download_sec = _t2.time() - _dl_start
-            log(f"ASR视频下载失败({download_sec:.1f}s): {e}", "WARN")
+            log(f"{log_label}失败({download_sec:.1f}s): {e}", "WARN")
             return None, download_sec, 0

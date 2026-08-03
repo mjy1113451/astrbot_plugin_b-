@@ -1,6 +1,0 @@
-name: astrbot_plugin_bilibili_learning
-display_name: B站学习助手
-desc: B站视频搜索、分析和全自动刷视频插件。支持搜索/热门/分析B站视频、AI内容评分与知识归档、向量知识库语义检索、全自动推荐流刷视频、评论互动、私信处理、日记与自我进化。
-version: v3.0.1
-author: mjy1113451
-repo: https://github.com/mjy1113451/astrbot_plugin_b-

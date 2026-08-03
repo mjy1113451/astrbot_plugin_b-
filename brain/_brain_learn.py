@@ -7,12 +7,14 @@ import re
 from datetime import datetime
 
 from brain._mixin_imports import *
+from api.subtitles import SYSTEM_PROMPT_COMMENT_SUMMARY
+from brain.local_note import build_local_subtitle_note
 
 
 class BrainLearnMixin:
     """学习与知识归档方法"""
 
-    async def learn_from_video(self, bvid, title, up, url, subtitle_text, topic_suggestion, video_desc="", score=None, comment_summary=None):
+    async def learn_from_video(self, bvid, title, up, url, subtitle_text, topic_suggestion, video_desc="", score=None, comment_summary=None, skip_auto_export=False):
         # 🔒 二次守卫：分数不达标直接拒绝归档
         if score is not None and score < LEARN_MIN_SCORE:
             log(f"📭 learn_from_video 拒绝低分归档: score={score:.1f}<{LEARN_MIN_SCORE} | 《{title}》", "LEARN")
@@ -40,7 +42,14 @@ class BrainLearnMixin:
             classify_text = subtitle_text
             if video_desc:
                 classify_text = f"[视频简介] {video_desc[:500]}\n\n[视频内容] {subtitle_text}"
-            category_path = self.classifier.classify_content(title, classify_text, bvid, topic_suggestion)
+            try:
+                category_path = await asyncio.wait_for(
+                    self.classifier.classify_content(title, classify_text, bvid, topic_suggestion),
+                    timeout=15,
+                )
+            except Exception as classify_error:
+                category_path = "未分类"
+                log(f"智能分类不可用，15秒内降级到未分类: {classify_error}", "WARN")
             log(f"智能分类结果: '{category_path}'", "KB")
             
             category_folder = self.classifier.get_or_create_folder(category_path)
@@ -68,28 +77,36 @@ class BrainLearnMixin:
                 if prompt_suffix:
                     summary_context += f"\n\n【笔记风格要求】\n{prompt_suffix}"
 
-            if should_use_chapter_lock(subtitle_text, config):
-                log("长视频触发章节锁定 + 内容追加算法", "LEARN")
-                summary_content = await generate_chapter_locked_note(
-                    ai_call=self._call_ai_with_retry,
-                    model=MODEL_BRAIN,
-                    system_prompt=SYSTEM_PROMPT_SUMMARY,
-                    title=title,
-                    up=up,
-                    url=url,
-                    subtitle_text=subtitle_text,
-                    video_desc=video_desc,
-                    cfg=config,
-                )
-            else:
-                resp = await self._call_ai_with_retry(
-                    model=MODEL_BRAIN,
-                    messages=[
-                        {"role": "system", "content": SYSTEM_PROMPT_SUMMARY},
-                        {"role": "user", "content": summary_context}
-                    ]
-                )
-                summary_content = resp.choices[0].message.content
+            summary_heading = "## [BRAIN] AI内容总结"
+            try:
+                if should_use_chapter_lock(subtitle_text, config):
+                    log("长视频触发章节锁定 + 内容追加算法", "LEARN")
+                    summary_content = await generate_chapter_locked_note(
+                        ai_call=self._call_ai_with_retry,
+                        model=MODEL_BRAIN,
+                        system_prompt=SYSTEM_PROMPT_SUMMARY,
+                        title=title,
+                        up=up,
+                        url=url,
+                        subtitle_text=subtitle_text,
+                        video_desc=video_desc,
+                        cfg=config,
+                    )
+                else:
+                    resp = await self._call_ai_with_retry(
+                        model=MODEL_BRAIN,
+                        messages=[
+                            {"role": "system", "content": SYSTEM_PROMPT_SUMMARY},
+                            {"role": "user", "content": summary_context}
+                        ]
+                    )
+                    summary_content = resp.choices[0].message.content
+                if not str(summary_content or "").strip():
+                    raise RuntimeError("AI总结返回空内容")
+            except Exception as summary_error:
+                summary_heading = "## 本地降级归档（原始材料）"
+                summary_content = build_local_subtitle_note(subtitle_text, video_desc)
+                log(f"AI总结不可用，已改为保存原始字幕摘录: {summary_error}", "WARN")
             
             desc_section = f"- **简介**: {video_desc}\n" if video_desc else ""
             file_header = (
@@ -103,7 +120,7 @@ class BrainLearnMixin:
                 f"- **分类**: {category_path}\n"
                 f"- **视频ID**: {bvid}\n\n"
                 f"---\n\n"
-                f"## [BRAIN] AI内容总结\n\n"
+                f"{summary_heading}\n\n"
             )
 
             full_content = file_header + summary_content
@@ -127,21 +144,22 @@ class BrainLearnMixin:
             log(f"知识已总结并保存到: {file_path}", "SUCCESS")
             self.write_learning_log(category_path, title, file_path)
 
-            if MINDMAP_ENABLED and MINDMAP_AUTO_GENERATE:
-                try:
-                    mindmap_path = export_mindmap(file_path, cfg=config)
-                    log(f"思维导图已生成: {mindmap_path}", "SUCCESS")
-                except Exception as mm_e:
-                    log(f"思维导图生成失败: {mm_e}", "WARN")
+            if not skip_auto_export:
+                if MINDMAP_ENABLED and MINDMAP_AUTO_GENERATE:
+                    try:
+                        mindmap_path = export_mindmap(file_path, cfg=config)
+                        log(f"思维导图已生成: {mindmap_path}", "SUCCESS")
+                    except Exception as mm_e:
+                        log(f"思维导图生成失败: {mm_e}", "WARN")
 
-            # 📄 Word 文档自动导出（独立 Word/ 文件夹，受 document_export.enabled 控制）
-            if DOC_EXPORT_ENABLED:
-                try:
-                    from services.document_export import export_docx
-                    docx_path = export_docx(file_path, kb_root=KNOWLEDGE_BASE_DIR)
-                    log(f"Word 文档已导出: {docx_path}", "SUCCESS")
-                except Exception as de_e:
-                    log(f"Word 文档导出失败: {de_e}", "WARN")
+                # 📄 Word 文档自动导出（独立 Word/ 文件夹，受 document_export.enabled 控制）
+                if DOC_EXPORT_ENABLED:
+                    try:
+                        from services.document_export import export_docx
+                        docx_path = export_docx(file_path, kb_root=KNOWLEDGE_BASE_DIR)
+                        log(f"Word 文档已导出: {docx_path}", "SUCCESS")
+                    except Exception as de_e:
+                        log(f"Word 文档导出失败: {de_e}", "WARN")
             
             self.classifier.show_category_structure()
 

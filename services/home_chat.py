@@ -8,7 +8,7 @@
 - 根据看的视频画一个用户画像 / 我是一个什么样的人（用户可自定义）
 
 增强能力（2026-07-07）：
-- **持久多会话**：会话按 JSON 落盘到 Data/HomeChat/，支持新建/选择/重命名/删除/持久上下文。
+- **持久多会话**：会话按 JSON 落盘到用户数据目录的 Data/HomeChat/。
 - **上下文模式**：persistent(持久上下文，保留最近若干轮) / infinite(无限上下文，全部历史) / none(无上下文，仅知识库检索)。
 - **高度自定义**：可自定义系统提示词、调用模型、温度；默认 AI 模式，可切 Agent。
 """
@@ -23,9 +23,12 @@ from pathlib import Path
 from typing import Any
 
 BASE_DIR = Path(__file__).resolve().parent.parent
-DATA_DIR = BASE_DIR / "Data"
+from core.config import resolve_knowledge_base_dir
+from core.user_data import DATA_DIR, USER_DATA_DIR
+
 CONV_DIR = DATA_DIR / "HomeChat"
-LEARNING_LOG_FILE = BASE_DIR / "learning_log.md"
+LEARNING_LOG_FILE = USER_DATA_DIR / "learning_log.md"
+
 
 # 持久上下文模式下保留的最近消息轮数上限（单条消息计 1）
 PERSISTENT_HISTORY_LIMIT = 20
@@ -134,12 +137,7 @@ def _append_message(conv: dict, role: str, content: str) -> None:
 #  上下文采集
 # ─────────────────────────────────────────────
 def _resolve_kb_dir(cfg: dict | None) -> Path:
-    if cfg and isinstance(cfg, dict):
-        kb = cfg.get("knowledge_base_dir") or (cfg.get("knowledge", {}) or {}).get("base_dir")
-        if kb:
-            p = Path(kb)
-            return p if p.is_absolute() else BASE_DIR / p
-    return BASE_DIR / "KnowledgeBase"
+    return Path(resolve_knowledge_base_dir(cfg))
 
 
 def read_recent_videos(limit: int = 20) -> list[dict[str, str]]:

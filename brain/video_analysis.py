@@ -140,6 +140,8 @@ async def analyze_bilibili_video_input(user_input: str, force_mode: str | None =
     title = ""
     up_name = "未知"
     up_uid = 0
+    aid = 0
+    cover_url = ""
     try:
         meta = await brain.bili._wbi_get('https://api.bilibili.com/x/web-interface/view', params={'bvid': bvid})
         vinfo = meta.json()
@@ -148,12 +150,20 @@ async def analyze_bilibili_video_input(user_input: str, force_mode: str | None =
             title = vdata.get('title', '')
             up_name = vdata.get('owner', {}).get('name', '未知')
             up_uid = vdata.get('owner', {}).get('mid', 0)
+            aid = vdata.get('aid', 0)
+            cover_url = vdata.get('pic', '')
+            brain._last_video_desc = vdata.get('desc', '') or ''
+            brain._current_video_tags = vdata.get('tags', []) or []
+            brain._current_video_category = vdata.get('tname', '') or ''
+            brain._current_video_duration = vdata.get('duration', 0) or 0
         else:
             return False, f"获取视频信息失败: code={vinfo.get('code')}"
     except Exception as e:
         return False, f"获取视频信息失败: {e}"
 
     video_url = f"https://www.bilibili.com/video/{bvid}"
+    cover_desc, _cover_score = await brain.analyze_vision(cover_url)
+    brain._current_video_cover_desc = cover_desc
     success, subtitle_text = await brain.understand_video_for_decision(bvid, title=title, force_mode=force_mode)
     if not success:
         subtitle_text = f"[理解受限] {subtitle_text}"
@@ -162,18 +172,15 @@ async def analyze_bilibili_video_input(user_input: str, force_mode: str | None =
 
     comment_text = "[未读取评论]"
     danmaku_text = ""
-    aid = 0
-    try:
-        meta = await brain.bili._wbi_get('https://api.bilibili.com/x/web-interface/view', params={'bvid': bvid})
-        vinfo = meta.json()
-        aid = vinfo.get('data', {}).get('aid', 0) if vinfo.get('code') == 0 else 0
-    except Exception:
-        aid = 0
     if aid:
-        try:
-            comment_text, _c_list = await brain._get_comments_context(aid)
-        except Exception:
-            comment_text = "[未读取评论]"
+        workflow_cfg = config.get("learning_workflow", {}) if isinstance(config, dict) else {}
+        if workflow_cfg.get("read_comments", True):
+            try:
+                comment_text, _c_list = await brain._get_comments_context(aid)
+            except Exception:
+                comment_text = "[未读取评论]"
+        else:
+            comment_text = "[评论读取已在学习流程中关闭]"
         try:
             danmaku_list = await brain.maybe_read_danmaku(bvid, force=True)
             if danmaku_list:
@@ -185,7 +192,7 @@ async def analyze_bilibili_video_input(user_input: str, force_mode: str | None =
     objective_prompt += "\n\n【性格模式】客观分析模式：基于内容质量公正评分，不随机切换夸夸/吐槽。"
     if intent:
         objective_prompt += f"\n\n【用户额外要求】{intent}"
-    context = f"视频标题: {title}\nUP主: {up_name}\n【视频内容字幕】:{subtitle_text}\n{comment_text}\n{danmaku_text}"
+    context = f"视频标题: {title}\nUP主: {up_name}\n视频简介: {brain._last_video_desc}\n封面描述: {cover_desc}\n【视频内容字幕】:{subtitle_text}\n{comment_text}\n{danmaku_text}"
 
     score = 0
     thought = ""
@@ -197,9 +204,12 @@ async def analyze_bilibili_video_input(user_input: str, force_mode: str | None =
             request_timeout=120,
         )
         raw = resp.choices[0].message.content
-        start, end = raw.find("{"), raw.rfind("}")
-        if start >= 0 and end >= start:
-            decision = json.loads(raw[start:end + 1])
+        start = raw.find("{")
+        if start >= 0:
+            # Models sometimes append a second JSON block or explanatory text.
+            # Decode only the first complete object instead of consuming through
+            # the final closing brace and raising ``Extra data``.
+            decision, _ = json.JSONDecoder().raw_decode(raw[start:])
             score = float(decision.get('score', 0) or 0)
             thought = decision.get('thought', '')
             learning_topic = decision.get('learning_topic', '') or learning_topic
@@ -769,7 +779,7 @@ async def manual_video_analysis(force_platform: str | None = "bilibili"):
         if learn_text and len(learn_text) > 20:
             try:
                 _desc = getattr(brain, "_last_video_desc", "")
-                learn_success = await brain.learn_from_video(bvid, title, up_name, video_url, learn_text, learning_topic, video_desc=_desc, score=score)
+                learn_success = await brain.learn_from_video(bvid, title, up_name, video_url, learn_text, learning_topic, video_desc=_desc, score=score, skip_auto_export=True)
                 if learn_success:
                     print(f"{Fore.GREEN}[OK] 知识已归档到知识库！{Style.RESET_ALL}")
                 else:
@@ -1408,7 +1418,10 @@ async def _agent_video_analysis(brain, bvid, title, up_name, video_url, aid=0):
 
     def _agent_read_file(rel_path):
         """读取知识库文件"""
-        full_path = os.path.join(KNOWLEDGE_BASE_DIR, rel_path)
+        from services.knowledge_tutor import safe_resolve
+        full_path = safe_resolve(rel_path)
+        if full_path is None:
+            return f"非法路径: {rel_path}\n禁止访问知识库外部路径"
         if not os.path.exists(full_path):
             # 尝试模糊匹配
             all_files = _scan_knowledge_base_md_files()
@@ -1436,7 +1449,10 @@ async def _agent_video_analysis(brain, bvid, title, up_name, video_url, aid=0):
 
     async def _agent_delete_file(rel_path):
         """删除知识库文件（需4选1确认）"""
-        full_path = os.path.join(KNOWLEDGE_BASE_DIR, rel_path)
+        from services.knowledge_tutor import safe_resolve
+        full_path = safe_resolve(rel_path)
+        if full_path is None:
+            return f"非法路径: {rel_path}\n禁止访问知识库外部路径"
         if not os.path.exists(full_path):
             return f"文件不存在: {rel_path}"
         # 先预览文件内容
@@ -1462,7 +1478,10 @@ async def _agent_video_analysis(brain, bvid, title, up_name, video_url, aid=0):
 
     async def _agent_update_file(rel_path, new_content):
         """更新/新建知识库文件（需4选1确认）"""
-        full_path = os.path.join(KNOWLEDGE_BASE_DIR, rel_path)
+        from services.knowledge_tutor import safe_resolve
+        full_path = safe_resolve(rel_path)
+        if full_path is None:
+            return f"非法路径: {rel_path}\n禁止访问知识库外部路径"
         exists = os.path.exists(full_path)
         action = "替换" if exists else "新建"
         action_desc = f"{action}知识库文件: {rel_path}"
