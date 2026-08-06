@@ -1,6 +1,21 @@
 name: astrbot_plugin_bilibili_learning_bot
 display_name: B站学习助手
-desc: B站 AI 学习互动机器人 — AI 自动刷视频、学知识、评论互动、私信回复、自我进化
+short_desc: AI 刷 B 站视频、学知识、评论互动、私信回复、自我进化
+desc: B站 AI 学习互动机器人 — AI 自动刷视频、学知识、评论互动、私信回复、自我进化。提供完整 CLI / Web 控制面板、知识库整理、UP主主页学习、私信/评论安全审核、推荐与脑决策等能力。可作为独立应用运行，也可作为 AstrBot 插件加载（由 PluginManager 通过 metadata.yaml 自动识别 class BilibiliLearningBot(Star)）。
 version: v0.01
 author: mjy1113451
 repo: https://github.com/mjy1113451/astrbot_plugin_b-
+astrbot_version: ">=4.16,<5"
+support_platforms:
+  - aiocqhttp
+  - lark
+  - discord
+  - telegram
+  - slack
+social_link: https://github.com/mjy1113451/astrbot_plugin_b-
+tags:
+  - bilibili
+  - learning
+  - knowledge-base
+  - automation
+  - ai-agent
