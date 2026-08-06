@@ -1,4 +1,21 @@
 # astrbot_plugin_bilibili_learning/main.py
+"""AstrBot 插件入口
+
+AstrBot 通过 ``metadata.yaml`` 自动识别本插件，无需 ``@register`` 装饰器。
+插件类 ``BilibiliLearningBot(Star)`` 会被 AstrBot 的 ``PluginManager``
+扫描并加载（参考 ``astrbot.core.star.star_manager.PluginManager``）。
+
+运行时区分：
+
+- 被 AstrBot 加载：仅 ``BilibiliLearningBot`` 会被实例化，``if __name__ == "__main__"``
+  分支不会执行。
+- 直接 ``python3 main.py`` 运行：走 ``_run_cli_main()`` 进入 CLI 主菜单。
+- 测试：``tests/test_cli_exit.py`` 调用 ``main_module.run_cli()``。
+
+依据官方文档结论（``astrbot/core/star/register/star.py`` 中 ``register_star``
+已标记 deprecated；插件由 ``Star`` 子类与 ``metadata.yaml`` 共同识别），
+本文件不再引入任何 ``@register`` 装饰器。
+"""
 import asyncio
 import os
 import traceback
@@ -234,3 +251,41 @@ class BilibiliLearningBot(Star):
         except Exception as e:
             logger.error(f"查看后台任务异常: {e}")
         yield event.plain_result("请查看后台日志")
+
+
+def _run_cli_main() -> None:
+    """CLI 入口，供 ``python3 main.py`` 直接调用以及 ``tests/test_cli_exit.py`` 注入测试。
+
+    AstrBot 通过 ``metadata.yaml`` + ``class Plugin(Star)`` 自动识别插件，不依赖 ``@register``
+    装饰器（``@register_star`` 在上游 ``astrbot/core/star/register/star.py`` 已标记为 deprecated）。
+    因此 ``main.py`` 在被 AstrBot 加载时仅需导出 ``class BilibiliLearningBot(Star)``；
+    本函数仅用于 CLI / 桌面 / 测试场景。
+    """
+    import logging as _logging
+    from utils.display import log as _log
+
+    # 与 CLI 入口行为保持一致：先打印免责声明，再走主菜单。
+    try:
+        _disclaimer_confirm()
+    except Exception:
+        pass
+
+    from cli.app import show_main_menu
+    while True:
+        try:
+            show_main_menu()
+        except (KeyboardInterrupt, EOFError):
+            _log("\n[EXIT] 已取消，程序已退出", "INFO")
+            return
+        except Exception as _exc:
+            _logging.getLogger(__name__).exception("主菜单运行异常: %s", _exc)
+            _log(f"[ERROR] 主菜单运行异常: {_exc}", "ERROR")
+            return
+
+
+# 兼容旧测试导入：`tests/test_cli_exit.py` 使用 `main_module.run_cli()`。
+run_cli = _run_cli_main
+
+
+if __name__ == "__main__":
+    _run_cli_main()
