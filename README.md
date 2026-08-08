@@ -1,6 +1,6 @@
 # bilibili_learning_bot
 
-> **B站 AI 学习互动机器人** — AI 自动刷视频、学知识、评论互动、私信回复、自我进化，内置 Web 管理面板，支持一键打包 Windows EXE。
+> **B站 AI 学习互动机器人** — AI 自动刷视频、学知识、评论互动、私信回复、自我进化
 >
 > 版本: **3.1.2** | License: MIT | 项目文档: https://bxya.app/
 
