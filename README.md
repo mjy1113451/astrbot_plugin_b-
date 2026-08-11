@@ -3,7 +3,8 @@
 > **B站 AI 学习互动机器人** — AI 自动刷视频、学知识、评论互动、私信回复、自我进化
 >
 > 版本: **3.1.2** | License: MIT 
-＞此插件改写经过原作者xiaoyaya(bilibili_learning_bot)[https://github.com/xiaoyaya191/bilibili_learning_bot] 同意
+＞此插件改写经过原作者xiaoyaya
+(bilibili_learning_bot)[https://github.com/xiaoyaya191/bilibili_learning_bot] 同意
 
 ---
 
