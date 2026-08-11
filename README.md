@@ -4,7 +4,7 @@
 >
 > 版本: **3.1.2** | License: MIT 
 >
-＞此插件改写经过原作者xiaoyaya
+>此插件改写经过原作者xiaoyaya
 [bilibili_learning_bot](https://github.com/xiaoyaya191/bilibili_learning_bot)同意
 
 ---
