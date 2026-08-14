@@ -70,7 +70,6 @@
 ├── services/             # 🔧 32 个服务（深研 / 测验 / 思维导图 / Word / 兴趣引擎 / RAG…）
 ├── ob_bridge/            # 🌉 开放平台桥接（鉴权 / AB 测试 / 审计）
 ├── xingye_bot/           # 🤖 扩展组件（LLM / 状态 / 记忆 / 进化 / ASR / 网格帧）
-├── utils/                # 🛠 通用工具（托盘 / 启动器 / 存储 / 锁）
 ├── templates/claude/     # 🎨 Claude 设计系统模板 + 7 个参考页
 ├── tests/                # 🧪 181 个 pytest 测试
 ├── app-icons/            # 应用图标
