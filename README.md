@@ -59,12 +59,7 @@
 
 ```
 ├── main.py               # 🚀 主入口（CLI 交互菜单 + 自动化启动）
-├── desktop_app.py        # 🖥️ Windows EXE 启动器（托盘 + 面板）
-├── web_panel.py          # 🌐 Flask Web 管理面板（后端）
-├── web_panel.html        # Web 面板模板（Claude 风格，亮暗双模式）
 ├── BiliLearn.spec        # 📦 PyInstaller 打包配置
-├── build_windows_exe.bat # 📦 一键打包脚本（Windows）
-│
 ├── api/                  # 🔌 B站 API 层（客户端 / 登录 / 字幕 / 节流）
 ├── brain/                # 🧠 核心大脑（Mixin 组合：主循环 / 视频理解 / AI 调用 / 会话）
 ├── cli/                  # 💻 命令行菜单
