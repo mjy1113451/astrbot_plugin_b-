@@ -17,15 +17,6 @@
 - 冻结 EXE 验证了人格创建、启用、编辑、删除，以及兴趣、收藏夹、日记、心情、行为设置和二维码生成。
 - 监听模式在未完成 B 站登录时不再先报告启动成功后立即退出，改为直接提示先登录。
 - 发布验收覆盖 54 个本地读取接口和 20 个本地写入/撤销流程。
-- Windows 网页应用保留所有用户数据在 `%LOCALAPPDATA%\BiliLearn`，打包产物不包含登录 Cookie、API Key、聊天记录、知识库、二维码或 ASR 模型。
-- 发布前全量测试：`309 passed`。
-
-## 3.1.2 Windows 网页应用入口 (2026-07-11)
-
-### 🖥️ Windows 应用
-- `desktop_app.py` 改为本地 Web 控制面板启动器：启动服务后自动在默认浏览器打开 `http://127.0.0.1:8080`。
-- `build_windows_exe.bat` 构建网页应用 EXE，打包界面与现有 Web 面板保持一致。
-- 移除 Qt 桌面界面依赖，后续功能和视觉迭代统一在 Web 面板进行。
 
 
 ## 3.1.2 架构收敛与稳定性修复 (2026-07-11)
@@ -33,18 +24,10 @@
 ### 🔧 修复与重构
 - 网页生成统一由 `services.html_renderer` 承担包装、阅读页与幻灯片导出；视频、知识辅导和深研模块不再各自维护完整 HTML 模板。
 - 修复阅读页 Markdown 列表解析，避免 `-`/`*` 标记被输出到正文。
-- Web 面板首次启动先创建数据目录；备份列表接口改为 `GET`；快捷配置预设写入标准 `active_preset`，并兼容历史错误字段。
-- 知识辅导同步请求超过三分钟会返回明确超时状态，不再错误报告成功。
-- Web Word/PDF 导出改复用 `services.document_export`；`requirements.txt` 纳入 `python-docx` 与 `reportlab`。
-- Web 健康检查、部署状态和 Docker 镜像标签统一使用 `VERSION` 的 `3.1.2`；备份路径支持 `BILI_BACKUP_DIR` 并默认使用用户目录。
 
 ### 📚 文档与参考页
 - 重写 README、开发索引、架构说明和服务模板，明确二次开发边界与统一网页生成入口。
 - 升级网页生成提示词，新增学习摘要、深研证据链参考页面。
-
-### ✅ 验证
-- `python -m pytest -q`：53 passed。
-- 全量 `compileall`、Web 首次启动和备份路径冒烟验证通过。
 
 
 ## 3.0.3 抽帧画质选择 + 平台聚焦 (2026-07-07)
@@ -96,8 +79,6 @@
 - **`.md` 大小写回退**：`/api/kb/file` 读取时若精确路径不存在，按忽略大小写在知识库目录内查找同名文件，避免大写 `.MD` 导致 404。
 
 ### ✅ 验证
-
-- `python -m py_compile core/config.py services/knowledge_tutor.py web_panel.py` 通过；相关文件 linter 0 诊断。
 - `resolve_knowledge_base_dir()` 三种情况验证：相对路径→归并 BASE_DIR、绝对路径→原样、缺省→默认 `KnowledgeBase`。
 
 ## 3.0.2 配置同步与运行稳定性修复 (2026-07-07)
@@ -114,17 +95,12 @@
 - **模型列表错误提示**：模型接口返回非 JSON 时提示检查 `/v1` 地址并展示响应预览。
 
 ### ✅ 验证
-
-- `python -m py_compile core\config.py cli\app.py api\auth.py brain\private_msg.py persona\managers.py web_panel.py` 通过。
 - 核心配置读取验证：API Key、Base URL、思考模型均可读取到已配置状态。
 
 ## 3.0.2 README 对齐与部署健康检查补强 (2026-07-07)
 
 ### 🔧 修复
-
-- **Web 默认端口对齐 README**：裸启动 `python3 web_panel.py` 默认使用 `7860`；Docker 通过 `WEB_PORT=8080` 保持 compose 访问 `8080`。
 - **健康检查免登录**：`/api/health`、`/deploy_status`、`/api/asr/status` 可被 Docker/部署探针直接访问。
-- **首次启动稳定性**：Web 面板启动前先创建 `Data/`，避免首次写入 `.web_secret_key` 失败。
 - **README 平台说明对齐**：补充网页链接平台，并明确 CLI `V` 命令开始先选平台、回车默认 B站。
 
 ## 3.0.2 PR #17 共享工具去重修复 (2026-07-07)
@@ -148,15 +124,11 @@
 
 - **README 补强长视频学习卖点**：新增“章节锁定 + 内容追加”“零信息丢失导向”“思维导图导出”说明。
 - **README 新增 FAQ**：补充项目区别、长视频防遗漏、多平台输入、知识库能力等常见问题。
-- **Web 面板 SEO**：`web_panel.html` 新增 `meta description` 和 `FAQPage` JSON-LD 结构化数据。
 - **差别文档更新**：`G:\code\work\差别.md` 已标记 P0 产品化文案与 FAQPage JSON-LD 为已完成。
 
 ## 3.0.2 P0 修复与批量导图 API (2026-07-07)
 
 ### 🔧 修复
-
-- **版本号统一**：`VERSION`、`start.sh`、`requirements.txt`、`install_termux.sh`、`docker-compose.yml` 统一到 `3.0.2`。
-- **批量思维导图路由补齐**：`web_panel.py` 新增 `POST /api/export/mindmap/all`，扫描 `KnowledgeBase/**/*.md` 批量调用 `export_mindmap()`，返回总数、成功数、失败数、输出路径和错误列表。
 - **差别文档更新**：`G:\code\work\差别.md` 已标记版本统一和批量导图 API 为 P0 已完成。
 
 ## 3.0.2 文档与 Landing 更新 (2026-07-07)
@@ -165,7 +137,7 @@
 
 - **Landing 快速识别页**：文档站首页新增平台选择器（默认 B站）、视频链接/本地路径输入、快捷示例和识别结果展示。
 - **轻量识别 API**：`vitepress-demo-main/main.py` 新增 `POST /api/analyze`，支持 BV号、B站链接、YouTube、抖音、快手、网页链接和本地文件路径识别。
-- **使用文档**：新增 `docs/guide/usage.md`，覆盖环境准备、启动方式、CLI `V` 命令、Web 面板、Landing 页面和常见问题。
+- **使用文档**：新增 `docs/guide/usage.md`，覆盖环境准备、启动方式、CLI `V` 命令，anding 页面和常见问题。
 - **区别文档**：新增 `docs/guide/differences.md`，说明 v3.0.2 相比旧版在全平台适配、Web 安全、Landing 页面、@通知响应、知识输出方面的变化。
 
 ### 🔧 更新
@@ -177,9 +149,8 @@
 ## 2.2.1 → 3.0.0
 
 ### 🏗️ 架构重构
-- 16.8K 行单体 `start_cli.py` → 4 行入口 + 24 个职责清晰的模块文件
 - 新增 `main.py` 主入口，统一 CLI 和 Web 面板启动
-- 拆分为 `api/` / `brain/` / `knowledge/` / `persona/` / `security/` / `services/` / `utils/` / `xingye_bot/`
+- 拆分为 `api/` / `brain/` / `knowledge/` / `persona/` / `security/` / `services/`/ `xingye_bot/`
 - 删除重复代码 `new_agent.py`（17K 行）、死代码 `interaction_service.py`
 - 统一配置系统，`xingye_bot/settings.py` → 从 `core/config.py` 读取
 - 密码 SHA-256 哈希存储
@@ -193,22 +164,10 @@
 
 - **📡 实时监听模式**：独立于视频刷取的消息监听引擎
   - 只盯私信和评论，有新消息立刻 AI 回复，不刷视频、不消耗精力
-  - Web面板新增「📡 实时监听」页面，含启停控制、配置、统计、实时日志
 
 - **🎨 视频→网页 + Claude 设计系统**：将已学视频生成精美 PPT 风格 HTML
   - 支持多主题，内置 Claude 设计主题
   - 毛玻璃卡片 + 数字滚动动画（easeOutExpo 缓动）
-  - `templates/claude/` 含 6 个参考页面 + AI 设计规范
-
-- **🌐 Web面板UI全面重设计**
-  - 毛玻璃效果、渐变按钮、动画过渡、响应式布局
-  - 侧边栏 active 状态渐变背景、页面切换动画、自定义滚动条
-
-- **🛡️ 安全审查**：关键词过滤 + 政治敏感拦截 + 提示词注入防护
-
-- **🔄 备用API降级**：主 API 连续失败自动切换备用提供商，10分钟后自动恢复
-
-- **📤 隐私导出**：一键导出配置，API Key/Cookie 脱敏保护
 
 ### 🔧 Bug 修复
 
@@ -228,8 +187,6 @@
 - `services/video_to_ppt.py` — 视频→HTML 网页生成
 - `services/agent_service.py` — Agent 技能执行
 - `services/knowledge_tutor.py` — 知识辅导
-- `templates/claude/` — Claude 设计系统
-- `tests/` — 43 个 pytest 测试
 
 ### 🆕 功能增强 (2026-07-06 BiliNote inspired)
 
