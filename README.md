@@ -4,8 +4,7 @@
 >
 > 版本: **3.1.6** | License: MIT
 >
->此插件改写经过原作者xiaoyaya
-[bilibili_learning_bot](https://github.com/xiaoyaya191/bilibili_learning_bot)同意
+> 本插件改写已经过原作者 xiaoyaya 同意：[bilibili_learning_bot](https://github.com/xiaoyaya191/bilibili_learning_bot)
 
 ---
 
@@ -14,7 +13,7 @@
 | 功能 | 说明 |
 |------|------|
 | 📺 **智能视频浏览** | AI 驱动 B站推荐流浏览，自动判断内容价值（评分 / 收藏 / 投币 / 点赞） |
-| 📚 **知识库系统** | 自动归档高质量视频，3 层分类 + 语义检索 + 复习回顾 |
+| 📚 **知识库系统** | 自动归档高质量视频，多层分类 + 检索 + 复习回顾 |
 | 💬 **评论互动** | 真实/模拟评论模式，AI 深度回复，支持图片分析 |
 | 📩 **私信处理** | 自动回复粉丝私信，持久上下文 + 长期记忆，支持节奏控制 |
 | 📡 **实时监听** | 独立监听引擎，只盯私信 + 评论实时 AI 回复，不刷视频不耗精力 |
@@ -23,10 +22,10 @@
 | 🎙️ **ASR 语音识别** | 视频语音转文字（FunASR / Whisper，可选安装） |
 | 🤖 **Agent 技能系统** | 自主规划目标 → 搜索 B站 → 看视频 → 总结知识，全自动闭环 |
 | 🎓 **知识辅导** | AI 讲解 / 问答 / 二次创作 / 生成 HTML 学习卡片 |
-| 🎨 **视频→网页** | 视频生成 PPT 风格 HTML，19 种视觉风格，支持 Claude 主题 |
-| 📊 **思维导图 & Word 导出** | 视频一键导出 `.mindmap.html` 与 `.docx` 文档 |
+| 🎨 **视频→网页** | 视频生成 PPT 风格 HTML（`services/video_to_ppt.py` 内置多套主题，含 Claude 主题） |
+| 📊 **思维导图 & Word 导出** | 视频导出 `.mindmap.html` 与 `.docx` 文档 |
 | 🔍 **深度研习** | 长视频多章节深研，证据链式总结（`services/deep_dive.py`） |
-| 🎯 **智能兴趣引擎** | 多维度评分 + 同义词 + 排除词 + 灵光一闪探索 + PsychoProfile 同步 |
+| 🎯 **智能兴趣引擎** | 多维评分 + 同义词 + 排除词 + 灵光一闪探索 + PsychoProfile 同步 |
 | 😊 **AI 心情系统** | 动态心情影响互动风格，支持自定义 |
 | 🏆 **干货点赞回顾** | 定期回顾收藏的干货视频，AI 复习（`services/like_review.py`） |
 | 🔔 **本地提醒** | 桌面通知 + 待办提醒（`services/reminders.py`） |
@@ -35,18 +34,53 @@
 
 ---
 
+## 🎮 指令速查
+
+以下指令在 AstrBot 中直接发送（前缀可被 AstrBot 的唤醒词配置影响）。
+
+| 指令 | 说明 |
+|------|------|
+| `/bili_start` | 启动后台学习机器人（每次启动前会重新校验核心依赖） |
+| `/bili_stop` | 停止后台机器人（最多等待 10 秒收尾） |
+| `/bili_status` | 查看后台机器人主循环状态 |
+| `/bili_config` | 配置入口（提示使用 `/bili_config_set`，该子指令尚未实现，见下方说明） |
+| `/bili_login` | B站扫码/验证码登录（**仅交互式终端可用**） |
+| `/bili_kb_list` | 列出知识库分类与条目数量 |
+| `/bili_kb_revisit` | 重温知识库 |
+| `/bili_kb_organize` | 整理知识库 |
+| `/bili_kb_custom` | 自定义知识管理（**仅交互式终端可用**） |
+| `/bili_analyze <BV号/链接>` | 分析单个视频 |
+| `/bili_up_learn <UID或名字>` | 学习 UP 主主页（默认取 10 个、跳过无字幕、评分 ≥ 7.0） |
+| `/bili_video2html <BV号/链接>` | 把视频转为 HTML 学习页面 |
+| `/bili_asr` | 切换 ASR 语音识别开关 |
+| `/bili_quiet` | 切换安静模式 |
+| `/bili_vision` | 切换封面分析开关 |
+| `/bili_fast` | 切换快速模式（跳过模拟真人延迟） |
+| `/bili_interest` | 兴趣设置（**仅交互式终端可用**） |
+| `/bili_comment` | 评论设置（**仅交互式终端可用**） |
+| `/bili_export` / `/bili_import` | 导出 / 导入配置（**仅交互式终端可用**） |
+| `/bili_reset` | 恢复出厂设置（**仅交互式终端可用**） |
+
+> 「仅交互式终端可用」的指令在 AstrBot 里发送只会得到提示，需要在服务器终端运行 `python main.py` 后进入对应菜单。
+>
+> ⚠️ 已知问题：`/bili_config` 会提示使用 `/bili_config_set <key> <value>`，但当前 `main.py` 并未注册该子指令。请改用 AstrBot 插件配置面板或终端 CLI 修改配置。
+
+---
+
 ## 🧩 环境要求
 
 - **AstrBot 核心版本**：`>=4.29.1,<5`（见 `metadata.yaml` 的 `astrbot_version`），低于该版本会在安装期被核心拒绝。
 - **由核心提供的依赖**：`openai`、`pydantic`、`httpx[socks]`、`pillow`、`qrcode`、`python-docx`、`reportlab`。
-  插件不再在 `requirements.txt` 中声明这些包（避免触发核心依赖保护机制，见 issues #18 / #20），
-  因此它们必须由 AstrBot 核心提供。每次执行 `/bili_start` 都会校验必需包的**导入、最低版本**，
-  版本约束统一维护在 `main.py` 的 `_CORE_PROVIDED_DEPENDENCIES`，按 PEP 440 比较版本
-  （包括 epoch、预发布、开发及本地版本）。必需包缺失、版本过低或无法解析时，会拒绝启动并列出具体原因；
-  补齐依赖后可直接重新发送 `/bili_start`。
+  插件不在 `requirements.txt` 中声明这些包（避免触发核心依赖保护机制，见 issues #18 / #20），
+  因此它们必须由 AstrBot 核心提供。每次执行 `/bili_start` 都会校验必需包的**导入与最低版本**，
+  版本约束统一维护在 `main.py` 的 `_CORE_PROVIDED_DEPENDENCIES`，按 PEP 440 比较
+  （包括 epoch、预发布、开发及本地版本）。缺失、版本过低或无法解析时会拒绝启动并列出具体原因；
+  补齐依赖后可直接重新发送 `/bili_start`，无需重启 AstrBot。
 - **SOCKS 代理（可选）**：缺少 `socksio` 时仅输出警告，不阻止直连或 HTTP 代理用户启动。
-  如需使用 SOCKS 代理，请先在 AstrBot 运行环境中安装 `httpx[socks]`，否则对应代理请求仍会失败。
+  如需使用 SOCKS 代理，请先在 AstrBot 运行环境中安装 `httpx[socks]`。
 - **插件专属依赖**：见 `requirements.txt`，均使用兼容区间而非精确锁定。
+- **可选依赖**：ASR（`funasr` / `torch` / `torchaudio`）与向量检索（`sentence-transformers` / `numpy`）
+  在 `requirements.txt` 中以注释形式提供，按需自行安装。
 
 ---
 
@@ -57,7 +91,7 @@
 修复版本标识为 **3.1.6**（详见 [更新日志](CHANGELOG.md)）。冲突日志本身不能证明下载来源或缓存状态。
 
 1. 从本仓库 `https://github.com/mjy1113451/astrbot_plugin_b-` 的 `main` 更新或重新下载安装包，
-   核对包内 `metadata.yaml` 的 `version` 与 `VERSION` 都是 `3.1.6`。若商店仍显示 3.1.2，刷新来源并使用强制更新；
+   核对包内 `metadata.yaml` 的 `version` 与 `VERSION` 都是 `3.1.6`。若商店仍显示旧版本，刷新来源并使用强制更新；
    商店/自定义源若配置了固定 `download_url`，维护者还需更新该地址，单改版本号不会替换固定旧包。
    自行制作标签/发行包时应从包含此修复的提交构建，不能复用旧源码包。
 2. 在日志给出的**实际安装目录**核对 `requirements.txt`，不要只看 GitHub 页面。
@@ -78,55 +112,75 @@
 
 ## ⚙️ AstrBot 插件配置
 
-- `use_astrbot_config` 默认为 `false`，默认继续使用旧配置。升级前建议备份 AstrBot 插件面板配置：AstrBot 加载新 schema 时会移除面板中不再声明的旧字段；独立业务配置文件不受此清理影响。
+- `use_astrbot_config` 默认为 `false`，默认继续使用业务配置文件（`config.json`）。升级前建议备份 AstrBot 插件面板配置：AstrBot 加载新 schema 时会移除面板中不再声明的旧字段；独立业务配置文件不受此清理影响。
 - 启用 `use_astrbot_config` 后，还须在 `apply_sections` 中列出需要应用的配置组名称（如 `api`、`vision`）；默认空列表不会修改旧配置。发送 `/bili_start` 时，**所选组内所有面板字段，包括默认值，都会覆盖业务配置**，请先检查这些值；未选中的组和未暴露的字段会保留。已运行的机器人需先停止再启动。关闭开关不会撤销已写入的设置。
 - 面板中的密钥留空或填写脱敏值时，保留原有密钥；填写的新密钥会写入业务配置文件，沿用其现有的明文存储方式，请保护该文件。
-- `automation` 中的 `dry_run` 和 `allow` 不是全局操作保护，不能将其当作安全保障；使用者仍需自行控制和审核操作。
-- 插件不再暴露 Web 管理配置，也不会启动 Web 管理面板。
+- `automation` 中的 `dry_run` 和 `allow` 不是全局操作保护，不能当作安全保障；使用者仍需自行控制和审核操作。
+- 插件模式**不提供 Web 管理面板**，登录 / 兴趣 / 评论 / 导入导出等交互式设置需在服务器终端运行 `python main.py`。
+  `services/video_to_ppt.py` 在生成 HTML 后会按需启动一个本地 Flask 预览服务，仅用于本地预览，不是管理后台。
 
 ---
 
-## 📊 v3.0.2 → v3.1.x 版本对比
+## 🗂️ 数据存放位置
 
-| 维度 | v3.0.2 | v3.1.2+（当前 3.1.6） |
-|------|--------|----------------------|
-| **代码规模** | 77 个 Python 文件 / ~34k 行 | 113 个 Python 文件 / ~54k 行（+47%） |
-| **数据目录** | 项目内 `Data/`（打包/升级易丢） | ✅ `%LOCALAPPDATA%\BiliLearn`（打包产物零隐私数据，升级不丢） |
-| **人格管理** | 简单 prompt 配置 | 多人格管理，key 与显示名双匹配 |
-| **HTML 渲染** | 各模块各自维护模板 | ✅ `services/html_renderer.py` 统一渲染（阅读页 / 幻灯片 / 导出） |
-| **服务模块** | 12 个 | ✅ 32 个（新增深度研习、测验生成、思维导图、Word 导出、本地收藏、点赞回顾、提醒、RAG 问答、平台适配、代理配置、版本历史…） |
-| **评论回复** | 基础回复 | ✅ 顶层/子回复路由修复、12006 失效处理、AI 选择失效 ID 跳过 |
-| **监听引擎** | 基础轮询 | ✅ 上下文合并、超时跳过、`-509` 退避 |
-| **开放平台桥接** | ❌ | ✅ `ob_bridge/`（开放平台鉴权、AB 测试、审计） |
-| **备份与恢复** | 手动导出 | ✅ 分组备份（设置 / 记忆 / 知识 / 产物）+ 恢复 |
-| **测试** | 43 个 pytest | ✅ 181 个 pytest（`319 passed` 全量发布验证） |
-| **稳定性修复** | — | 人格持久化、Cookie 校验、风控、多实例锁、AI 降级冷却、上下文截断保护 |
+| 场景 | 私有数据（`Data/`、`qr_codes/`） | 生成产物（知识库 / 思维导图 / Word / HTML） |
+|------|--------------------------------|------------------------------------------|
+| 源码运行 | `%LOCALAPPDATA%\BiliLearn\` | 项目根目录 |
+| 打包 / EXE | `%LOCALAPPDATA%\BiliLearn\` | `%LOCALAPPDATA%\BiliLearn\` |
 
-> 详细演进见 [CHANGELOG.md](CHANGELOG.md)。
+- 可用环境变量 `BILI_USER_DATA_DIR` 覆盖私有数据目录。
+- 非 Windows 环境下 `LOCALAPPDATA` 未设置时回退到 `~/AppData/Local/BiliLearn`，建议显式设置 `BILI_USER_DATA_DIR`。
+- Cookie、API Key、二维码、知识库全部只存在本地；打包产物不含任何隐私数据。
 
 ---
 
 ## 🧱 项目结构
 
 ```
-├── main.py               # 🚀 主入口（CLI 交互菜单 + 自动化启动）
-├── BiliLearn.spec        # 📦 PyInstaller 打包配置
+├── main.py               # 🚀 插件入口（BilibiliLearningBot(Star) + CLI 主菜单）
+├── metadata.yaml         # 🏷️ AstrBot 插件元数据
+├── _conf_schema.json     # ⚙️ AstrBot 插件配置 schema
+├── _upgrade_v2.py        # 🔄 v2 → v3 数据迁移脚本
+├── editdistance.py       # 🔤 轻量编辑距离实现
 ├── api/                  # 🔌 B站 API 层（客户端 / 登录 / 字幕 / 节流）
 ├── brain/                # 🧠 核心大脑（Mixin 组合：主循环 / 视频理解 / AI 调用 / 会话）
-├── cli/                  # 💻 命令行菜单
+├── cli/                  # 💻 命令行菜单（app.py 为交互式主菜单与后台任务）
 ├── core/                 # ⚙️ 配置 / 全局变量 / 用户数据路径 / 恢复出厂
-├── knowledge/            # 📚 知识库（分类 / 搜索 / 浏览 / 复习 / 自定义）
+├── knowledge/            # 📚 知识库（分类 / 搜索 / 浏览 / 复习 / 整理 / 自定义）
 ├── persona/              # 🎭 人格 + 心理画像引擎
 ├── security/             # 🛡️ 内容安全审查
-├── services/             # 🔧 32 个服务（深研 / 测验 / 思维导图 / Word / 兴趣引擎 / RAG…）
+├── services/             # 🔧 服务模块（深研 / 测验 / 思维导图 / Word / 兴趣引擎 / RAG / 提醒…）
 ├── ob_bridge/            # 🌉 开放平台桥接（鉴权 / AB 测试 / 审计）
-├── xingye_bot/           # 🤖 扩展组件（LLM / 状态 / 记忆 / 进化 / ASR / 网格帧）
+├── xingye_bot/           # 🤖 扩展组件（LLM / 状态 / 记忆 / 进化 / ASR / 定时任务）
+└── tests/                # 🧪 pytest 用例（5 个测试模块）
 ```
+
+当前仓库共 **109 个 Python 文件**。
+
+---
+
+## ❓ FAQ
+
+**Q: 数据存在哪里？**
+见上方「数据存放位置」。默认在 `%LOCALAPPDATA%\BiliLearn`，可用 `BILI_USER_DATA_DIR` 覆盖。
+
+**Q: 机器人刚启动就退出，日志里有 `ImportError`？**
+检查是否用了干净的 Python 环境。若 `PYTHONPATH` 指向另一个 Python 的 site-packages（例如装了多个 Python），`import PIL` 可能加载到不匹配的 Pillow。运行前执行 `echo %PYTHONPATH%`，为空最稳妥。
+
+**Q: AI 调用报 `'ascii' codec can't encode...`？**
+检查 `config.json` 的 `api.vision_api_key` / `unified_api_key` 是否被写成了 `"[hidden]"` 这类占位符（不要把脱敏导出的配置原样导回）。清空该字段会回退到 `unified_api_key`。
+
+**Q: 导出的配置里为什么没有 Cookie 和 API Key？**
+脱敏导出会把 API Key 与 Cookie 替换为 `[hidden]`。完整导出包含真实凭证，请妥善保管，不要公开分享。
+
+**Q: 导入别人的配置备份后 AI 全坏了，报 `'ascii' codec can't encode`？**
+导入时会自动过滤 `[hidden]`：已存在则保留原值，否则删除该字段需重新填写。已受影响的用户请手动编辑 `%LOCALAPPDATA%\BiliLearn\Data\config.json`，把 `unified_api_key` / `vision_api_key` 里的 `[hidden]` 换成真实 Key。
+
 ---
 
 ## ⚠️ 免责声明
 
-本项目仅供**学习与个人研究**使用。请遵守 B站用户协议与相关法律法规，合理控制互动频率，任何使用后果由使用者自行承担。
+本项目仅供**学习与个人研究**使用。请遵守 B站用户协议与相关法律法规，合理控制互动频率。本项目与 B站官方无任何关系，不保证接口长期可用，任何账号封禁、法律纠纷等后果由使用者自行承担。`SESSDATA` 是账号最高权限凭证，本插件只将其保存在本地用户目录，**切勿公开分享**扫码登录截图、`auth.json` 或 Cookie 内容。
 
 ---
 
@@ -136,14 +190,19 @@
 
 [作者插件群](https://qun.qq.com/universal-share/share?ac=1&authKey=g11r7YZ32NvsrmF6gs1p3jz%2FwPFaZvDqNTo2%2Bd1qJ0oi9QtKEUj48IuK%2BEYpJeVR&busi_data=eyJncm91cENvZGUiOiIxMDc1OTIwMzIzIiwidG9rZW4iOiJKbzdIbHRxVTV1OEovOG1MaVk2RWZMWkJvMjd3UVhNNktYOEViZVMrMDJ5bFEwa1lwRFlmdVBUUU4wTFkzRWsxIiwidWluIjoiMTczMTUzODMzNCJ9&data=Ee7Fzotcpdxp4NMkkSOCUWLBvNfkgreKTW5hcIg2_w337UccGjJgPcL-obkS2n6iraxtTqgDgZ1LxZ6UCfJY3Q&svctype=4&tempid=h5_group_info)
 
-tip:我的群仅供对插件功能有疑惑提问题，如果是bug或feat，请先提issue，谢谢！可以来群里问issue进度。
+tip: 群仅供插件功能答疑；bug 或新功能请先提 issue，也可以在群里问 issue 进度。
 
-#英文版
+---
+
+# English
+
 # bilibili_learning_bot
 
 > **Bilibili AI Learning Bot** — An AI that auto-watches videos, learns knowledge, interacts via comments, replies to DMs, and evolves itself.
 >
 > Version: **3.1.6** | License: MIT
+>
+> This plugin is a fork of [bilibili_learning_bot](https://github.com/xiaoyaya191/bilibili_learning_bot), with permission from the original author.
 
 ---
 
@@ -152,7 +211,7 @@ tip:我的群仅供对插件功能有疑惑提问题，如果是bug或feat，请
 | Feature | Description |
 |---------|-------------|
 | 📺 **Smart Video Browsing** | AI-driven browsing of Bilibili's recommendation feed, automatically judging content value (rating / favoriting / coin / like) |
-| 📚 **Knowledge Base System** | Auto-archives high-quality videos, with 3-tier categorization + semantic search + review & recap |
+| 📚 **Knowledge Base System** | Auto-archives high-quality videos, with multi-tier categorization + search + review & recap |
 | 💬 **Comment Interaction** | Real/simulated comment modes, AI in-depth replies, with image analysis support |
 | 📩 **Direct Message Handling** | Auto-replies to fan DMs, with persistent context + long-term memory, and pacing control |
 | 📡 **Real-time Listening** | Standalone listening engine that only watches DMs + comments for real-time AI replies — no video watching, low resource use |
@@ -161,8 +220,8 @@ tip:我的群仅供对插件功能有疑惑提问题，如果是bug或feat，请
 | 🎙️ **ASR Speech Recognition** | Video speech-to-text (FunASR / Whisper, optional install) |
 | 🤖 **Agent Skill System** | Autonomously plans goals → searches Bilibili → watches videos → summarizes knowledge, a fully automated loop |
 | 🎓 **Knowledge Tutoring** | AI explanations / Q&A / secondary creation / generates HTML study cards |
-| 🎨 **Video → Webpage** | Generates PPT-style HTML from videos, 19 visual styles, with Claude theme support |
-| 📊 **Mind Map & Word Export** | One-click export of videos to `.mindmap.html` and `.docx` documents |
+| 🎨 **Video → Webpage** | Generates PPT-style HTML from videos with multiple built-in themes (including Claude theme) |
+| 📊 **Mind Map & Word Export** | Export videos to `.mindmap.html` and `.docx` documents |
 | 🔍 **Deep Study** | Multi-chapter deep study of long videos, with evidence-chain summaries (`services/deep_dive.py`) |
 | 🎯 **Smart Interest Engine** | Multi-dimensional scoring + synonyms + exclusion words + "eureka" exploration + PsychoProfile sync |
 | 😊 **AI Mood System** | Dynamic mood affects interaction style, customizable |
@@ -173,87 +232,86 @@ tip:我的群仅供对插件功能有疑惑提问题，如果是bug或feat，请
 
 ---
 
-## ⚙️ AstrBot Plugin Configuration
+## 🎮 Commands
 
-- `use_astrbot_config` defaults to `false`, so the existing configuration remains in use by default. Back up the AstrBot panel configuration before upgrading: AstrBot removes fields no longer present in the schema when it loads the plugin. This cleanup does not affect the separate business configuration file.
-- After enabling `use_astrbot_config`, list the configuration groups to apply in `apply_sections` (for example, `api` and `vision`); the default empty list leaves existing settings unchanged. On `/bili_start`, **all panel fields in the selected groups, including defaults, overwrite the business settings**, so check their values first. Unselected groups and unexposed fields are preserved. Stop and restart a running bot to apply changes. Disabling the switch does not undo previously saved values.
-- Leaving a secret blank or entering a redacted value preserves the existing secret. A new secret is written to the business configuration file using its existing plaintext storage; protect that file.
-- The `automation` settings `dry_run` and `allow` are not global protections for operations and must not be treated as security guarantees. Users must still control and review operations themselves.
-- The plugin no longer exposes Web administration settings and does not start a Web administration panel.
+| Command | Description |
+|---------|-------------|
+| `/bili_start` | Start the background bot (re-checks core dependencies on every start) |
+| `/bili_stop` | Stop the background bot (wait up to 10 seconds for shutdown) |
+| `/bili_status` | Show the background bot status |
+| `/bili_config` | Config entry (prompts `/bili_config_set`, which is not implemented yet — see note below) |
+| `/bili_login` | Bilibili QR / verification-code login (**interactive terminal only**) |
+| `/bili_kb_list` | List knowledge base categories and item counts |
+| `/bili_kb_revisit` | Review the knowledge base |
+| `/bili_kb_organize` | Reorganize the knowledge base |
+| `/bili_kb_custom` | Custom knowledge management (**interactive terminal only**) |
+| `/bili_analyze <BV id / URL>` | Analyze a single video |
+| `/bili_up_learn <UID or name>` | Learn an uploader's homepage (defaults: 10 videos, skip ones without subtitles, score ≥ 7.0) |
+| `/bili_video2html <BV id / URL>` | Convert a video into an HTML study page |
+| `/bili_asr` | Toggle ASR speech recognition |
+| `/bili_quiet` | Toggle quiet mode |
+| `/bili_vision` | Toggle cover-image analysis |
+| `/bili_fast` | Toggle fast mode (skip human-like delays) |
+| `/bili_interest` | Interest settings (**interactive terminal only**) |
+| `/bili_comment` | Comment settings (**interactive terminal only**) |
+| `/bili_export` / `/bili_import` | Export / import configuration (**interactive terminal only**) |
+| `/bili_reset` | Factory reset (**interactive terminal only**) |
+
+> Commands marked "interactive terminal only" just reply with a hint inside AstrBot; run `python main.py` on the server instead.
+>
+> ⚠️ Known issue: `/bili_config` tells users to use `/bili_config_set <key> <value>`, but that sub-command is not registered in `main.py`. Use the AstrBot plugin config panel or the terminal CLI instead.
 
 ---
 
-## 📊 Version Comparison: v3.0.2 → v3.1.x
+## 🧩 Requirements
 
-| Dimension | v3.0.2 | v3.1.2+ (current 3.1.6) |
-|-----------|--------|--------------------------|
-| **Code Size** | 77 Python files / ~34k lines | 113 Python files / ~54k lines (+47%) |
-| **Data Directory** | In-project `Data/` (lost on packaging/upgrade) | ✅ `%LOCALAPPDATA%\BiliLearn` (packaged artifact contains zero private data, survives upgrades) |
-| **Persona Management** | Simple prompt config | Multi-persona management, key + display-name dual matching |
-| **HTML Rendering** | Each module maintained its own templates | ✅ `services/html_renderer.py` unified rendering (reading page / slides / export) |
-| **Service Modules** | 12 | ✅ 32 (added deep study, quiz generation, mind map, Word export, local favorites, like review, reminders, RAG Q&A, platform adaptation, proxy config, version history…) |
-| **Comment Replies** | Basic reply | ✅ Top-level/child reply routing fix, 12006 failure handling, AI skips invalid selected IDs |
-| **Listening Engine** | Basic polling | ✅ Context merging, timeout skip, `-509` backoff |
-| **Open Platform Bridge** | ❌ | ✅ `ob_bridge/` (open-platform auth, A/B testing, audit) |
-| **Backup & Restore** | Manual export | ✅ Grouped backup (settings / memory / knowledge / artifacts) + restore |
-| **Tests** | 43 pytest | ✅ 181 pytest (`319 passed` full release verification) |
-| **Stability Fixes** | — | Persona persistence, Cookie validation, risk control, multi-instance lock, AI degradation cooldown, context truncation protection |
+- **AstrBot core**: `>=4.29.1,<5` (see `astrbot_version` in `metadata.yaml`). Older cores reject the install.
+- **Core-provided packages**: `openai`, `pydantic`, `httpx[socks]`, `pillow`, `qrcode`, `python-docx`, `reportlab`.
+  The plugin does not declare them in `requirements.txt` to avoid the core dependency guard (issues #18 / #20).
+  `/bili_start` validates their import and minimum versions (constraints live in `_CORE_PROVIDED_DEPENDENCIES` in `main.py`,
+  compared per PEP 440). After installing missing packages, just send `/bili_start` again — no restart required.
+- **SOCKS proxy (optional)**: missing `socksio` only produces a warning; install `httpx[socks]` to use SOCKS proxies.
+- **Plugin-specific packages**: see `requirements.txt`, all use compatible ranges rather than exact pins.
+- **Optional packages**: ASR (`funasr` / `torch` / `torchaudio`) and vector search (`sentence-transformers` / `numpy`)
+  are listed as comments in `requirements.txt`.
 
-> See [CHANGELOG.md](CHANGELOG.md) for detailed evolution.
+---
+
+## ⚙️ Plugin Configuration
+
+- `use_astrbot_config` defaults to `false`, so the business configuration file (`config.json`) stays authoritative. Back up the AstrBot panel configuration before upgrading: AstrBot removes fields no longer present in the schema when it loads the plugin. This cleanup does not affect the separate business configuration file.
+- After enabling `use_astrbot_config`, list the groups to apply in `apply_sections` (for example, `api` and `vision`); the default empty list leaves existing settings unchanged. On `/bili_start`, **all panel fields in the selected groups, including defaults, overwrite the business settings**, so check their values first. Unselected groups and unexposed fields are preserved. Stop and restart a running bot to apply changes. Disabling the switch does not undo previously saved values.
+- Leaving a secret blank or entering a redacted value preserves the existing secret. A new secret is written to the business configuration file using its existing plaintext storage; protect that file.
+- The `automation` settings `dry_run` and `allow` are not global protections for operations and must not be treated as security guarantees. Users must still control and review operations themselves.
+- The plugin does **not** provide a Web admin panel. Interactive settings (login / interest / comments / import & export) require running `python main.py` on the server.
+  `services/video_to_ppt.py` starts a local Flask preview server after generating HTML — for local preview only, not an admin backend.
+
+---
+
+## 🗂️ Where Data Lives
+
+| Scenario | Private data (`Data/`, `qr_codes/`) | Generated artifacts (knowledge base / mind maps / Word / HTML) |
+|----------|------------------------------------|----------------------------------------------------------------|
+| Source checkout | `%LOCALAPPDATA%\BiliLearn\` | Project root |
+| Frozen / EXE | `%LOCALAPPDATA%\BiliLearn\` | `%LOCALAPPDATA%\BiliLearn\` |
+
+- Override the private data directory with the `BILI_USER_DATA_DIR` environment variable.
+- On non-Windows systems without `LOCALAPPDATA`, the fallback is `~/AppData/Local/BiliLearn`; prefer setting `BILI_USER_DATA_DIR` explicitly.
+- Cookies, API keys, QR codes and the knowledge base stay local; packaged artifacts contain no private data.
 
 ---
 
 ## 🧱 Project Structure
 
-```
-├── main.py               # 🚀 Main entry (CLI interactive menu + automated startup)
-├── api/                  # 🔌 Bilibili API layer (client / login / subtitles / throttling)
-├── brain/                # 🧠 Core brain (Mixin composition: main loop / video understanding / AI calls / session)
-├── cli/                  # 💻 Command-line menu
-├── core/                 # ⚙️ Config / globals / user data path / factory reset
-├── knowledge/            # 📚 Knowledge base (categorization / search / browsing / review / custom)
-├── persona/              # 🎭 Persona + psychological profile engine
-├── security/             # 🛡️ Content safety review
-├── services/             # 🔧 32 services (deep study / quiz / mind map / Word / interest engine / RAG…)
-├── ob_bridge/            # 🌉 Open-platform bridge (auth / A/B testing / audit)
-├── xingye_bot/           # 🤖 Extension components (LLM / state / memory / evolution / ASR / grid frames)
-└── dev_refs/             # 📖 Secondary-development reference docs
-```
+See the Chinese section above — the layout is identical.
+
+Current repository size: **109 Python files**.
 
 ---
 
+## 🛡️ Disclaimer
 
-## ❓ FAQ
-
-**Q: Where is the data stored?**
-Source version: project root `Data/`; Web/EXE version: `%LOCALAPPDATA%\BiliLearn` (Cookies, API Keys, knowledge base, and QR codes are all local only; the packaged artifact contains no private data).
-
-**Q: The bot exits immediately after startup, log shows `ImportError`?**
-Check whether you're using a clean Python environment. If `PYTHONPATH` points to another Python's site-packages (e.g., multiple Pythons installed), `import PIL` may load a mismatched Pillow. Run `echo %PYTHONPATH%` before running — empty is safest.
-
-**Q: AI call reports `'ascii' codec can't encode...`?**
-Check whether `config.json`'s `api.vision_api_key` / `unified_api_key` was written as a placeholder like `"[hidden]"` (don't write back a desensitized config export). Clearing that field falls back to `unified_api_key`.
-
-**Q: Why doesn't the exported config include Cookie and API Key?**
-A desensitized export replaces API keys and cookies with `[hidden]`. A full export includes real credentials and must be protected; never share it publicly.
-
-**Q: After importing someone else's config backup, AI is all broken, reports `'ascii' codec can't encode`?**
-On backup export, API Key / Cookie is desensitized to `[hidden]`; old versions would import and overwrite real config with the placeholder. 3.1.2 stable has fixed this: on import it auto-filters `[hidden]` (keeps existing value if present, otherwise deletes the field and you must refill). Already-affected users please manually edit `%LOCALAPPDATA%\BiliLearn\Data\config.json` and replace the `[hidden]` in `unified_api_key` / `vision_api_key` with the real Key.
-
----
-
-## 🛡️ Disclaimer (please read carefully)
-
-> The project author knows well that "the tool is innocent, but misuse is culpable." The following disclaimer **stacks as many layers as needed** — please read each item:
-
-1. **Unofficial**: This project has **no relationship** with the official bilibili (B站), is not an official release, and is not endorsed or responsible for by Bilibili. All trademarks and names belong to their respective owners.
-2. **Personal learning & exchange only**: This project is for **personal learning purposes** only, to study technologies such as HTTP / MCP / data processing. Any form of commercial use, profit-making, large-scale batch scraping, attacks, or abuse of Bilibili services is **prohibited**.
-3. **Legal risk at your own expense**: Bilibili's interfaces and terms of service may change at any time, and Bilibili has taken legal action against similar reverse-engineering projects (e.g., bilibili-api). This project is built on public interfaces and **does not guarantee long-term availability**; any disputes, account bans, or legal liabilities arising from using this project are borne solely by the user.
-4. **Account security**: `SESSDATA` is the **highest-privilege credential** of a Bilibili account; this project stores it only in your local user directory. **Never** publicly share QR-login screenshots, auth.json, or Cookie contents — leaking them is handing your account to someone else.
-5. **Content copyright**: Extracted subtitles, danmaku, comments, etc. are copyrighted by the original authors and Bilibili, for personal reading/learning only — **do not** repost, redistribute, or use commercially.
-6. **Stability & availability**: This project is provided "as is", without any express or implied warranty. Bilibili redesigns, risk control, network conditions, and other factors may all cause it to fail; when interfaces fail, follow the README to re-scan or fix it yourself — **the author does not promise a fix time**.
-7. **Not investment advice**: Any content produced by this project does not constitute investment, financial, legal, or other professional advice; quoting others' content does not mean agreeing with their views.
-8. **Risk-assumption clause**: Use constitutes agreement to all the above terms. If your region or use case does not allow such tools, please **stop using and delete this project immediately**.
+This project is for **personal learning purposes only**. It has no relationship with the official Bilibili service and provides no warranty of long-term availability; account bans or legal disputes arising from its use are borne solely by the user. `SESSDATA` is the highest-privilege credential of an account — this project stores it only in your local user directory. **Never** share QR-login screenshots, `auth.json`, or Cookie contents publicly.
 
 ---
 
@@ -263,4 +321,4 @@ On backup export, API Key / Cookie is desensitized to `[hidden]`; old versions w
 
 [my plugin group](https://qun.qq.com/universal-share/share?ac=1&authKey=g11r7YZ32NvsrmF6gs1p3jz%2FwPFaZvDqNTo2%2Bd1qJ0oi9QtKEUj48IuK%2BEYpJeVR&busi_data=eyJncm91cENvZGUiOiIxMDc1OTIwMzIzIiwidG9rZW4iOiJKbzdIbHRxVTV1OEovOG1MaVk2RWZMWkJvMjd3UVhNNktYOEViZVMrMDJ5bFEwa1lwRFlmdVBUUU4wTFkzRWsxIiwidWluIjoiMTczMTUzODMzNCJ9&data=Ee7Fzotcpdxp4NMkkSOCUWLBvNfkgreKTW5hcIg2_w337UccGjJgPcL-obkS2n6iraxtTqgDgZ1LxZ6UCfJY3Q&svctype=4&tempid=h5_group_info)
 
-tip:my plugin group  only can ask questions about plugin，if you find bugs or want feat,please issue first，thank you！you can enter my group to ask your issue's rate
+tip: the group is for plugin usage questions only; for bugs or feature requests please open an issue first.
