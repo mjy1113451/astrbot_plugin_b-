@@ -128,7 +128,7 @@ def _is_interactive() -> bool:
     """判断当前进程是否连接到交互式终端。
 
     Returns:
-        bool: stdin 是 TTY 时返回 True，否则返回 False（Docker / Web 面板 / 远程会话）。
+        bool: stdin 是 TTY 时返回 True，否则返回 False（Docker / 远程会话）。
     """
     try:
         return bool(sys.stdin and sys.stdin.isatty())
@@ -293,7 +293,7 @@ class BilibiliLearningBot(Star):
         if not _is_interactive():
             yield event.plain_result(
                 "ℹ️ B站登录需要扫码 / 输入验证码，请在服务器终端运行 python main.py "
-                "或使用 Web 面板完成登录。"
+                "完成登录。"
             )
             return
         try:
@@ -544,7 +544,7 @@ class BilibiliLearningBot(Star):
         if not _is_interactive():
             yield event.plain_result(
                 "ℹ️ 兴趣设置是交互式菜单，请在服务器终端运行 python main.py "
-                "或使用 Web 面板修改兴趣关键词。"
+                "修改兴趣关键词。"
             )
             return
         try:
@@ -561,7 +561,7 @@ class BilibiliLearningBot(Star):
         if not _is_interactive():
             yield event.plain_result(
                 "ℹ️ 评论设置是交互式菜单，请在服务器终端运行 python main.py "
-                "或使用 Web 面板修改评论相关配置。"
+                "修改评论相关配置。"
             )
             return
         try:
