@@ -1,4 +1,32 @@
-"\"\"\"Process-owned single-instance lock for bot and monitor processes.\"\"\"\nimport atexit\nimport os\n\n\nfrom colorama import Fore, Style\nfrom core.config import DATA_DIR\n\n\n\n\n_BOT_LOCK_FILE = None\n_bot_lock_acquired = False\n\n\n\n\ndef _lock_path() -> str:\n    global _BOT_LOCK_FILE\n    if _BOT_LOCK_FILE is None:\n        _BOT_LOCK_FILE = os.path.join(DATA_DIR, \"bot.lock\")\n    return _BOT_LOCK_FILE\n\n\n\n\ndef _read_lock_pid(path: str) -> int | None:\n    try:\n        with open(path, \"r\", encoding=\"utf-8\") as file:\n            pid = int(file.read().strip())\n        return pid if pid > 0 else None\n    except (OSError, ValueError):\n        return None\n\n\n\n\ndef _pid_is_running_windows(pid: int) -> bool:
+"""Process-owned single-instance lock for bot and monitor processes."""
+import atexit
+import os
+
+from colorama import Fore, Style
+from core.config import DATA_DIR
+
+
+_BOT_LOCK_FILE = None
+_bot_lock_acquired = False
+
+
+def _lock_path() -> str:
+    global _BOT_LOCK_FILE
+    if _BOT_LOCK_FILE is None:
+        _BOT_LOCK_FILE = os.path.join(DATA_DIR, "bot.lock")
+    return _BOT_LOCK_FILE
+
+
+def _read_lock_pid(path: str) -> int | None:
+    try:
+        with open(path, "r", encoding="utf-8") as file:
+            pid = int(file.read().strip())
+        return pid if pid > 0 else None
+    except (OSError, ValueError):
+        return None
+
+
+def _pid_is_running_windows(pid: int) -> bool:
     """Windows liveness check that never terminates the target process.
 
     os.kill(pid, 0) on Windows maps to TerminateProcess for signals other
@@ -37,4 +65,92 @@
         kernel32.CloseHandle(handle)
 
 
-def _pid_is_running(pid: int) -> bool:\n    if os.name == \"nt\":\n        try:\n            import psutil\n            return bool(psutil.pid_exists(pid))\n        except ImportError:\n            pass\n    try:\n        os.kill(pid, 0)\n        return True\n    except ProcessLookupError:\n        return False\n    except PermissionError:\n        return True\n    except OSError:\n        return False\n\n\n\n\ndef bot_lock_status(clean_stale: bool = False) -> dict[str, int | bool | None]:\n    \"\"\"Return lock ownership and optionally remove only a confirmed stale lock.\"\"\"\n    path = _lock_path()\n    if not os.path.exists(path):\n        return {\"locked\": False, \"pid\": None, \"stale\": False}\n    pid = _read_lock_pid(path)\n    active = pid is not None and _pid_is_running(pid)\n    stale = not active\n    if stale and clean_stale:\n        try:\n            if _read_lock_pid(path) == pid:\n                os.remove(path)\n        except OSError:\n            pass\n        return {\"locked\": False, \"pid\": pid, \"stale\": True}\n    return {\"locked\": active, \"pid\": pid, \"stale\": stale}\n\n\n\n\ndef _acquire_bot_lock() -> bool:\n    \"\"\"Acquire the lock atomically and never overwrite another process's lock.\"\"\"\n    global _bot_lock_acquired\n    path = _lock_path()\n    os.makedirs(DATA_DIR, exist_ok=True)\n\n\n    for _ in range(2):\n        try:"
+def _pid_is_running(pid: int) -> bool:
+    if os.name == "nt":
+        try:
+            import psutil
+            return bool(psutil.pid_exists(pid))
+        except ImportError:
+            return _pid_is_running_windows(pid)
+    try:
+        os.kill(pid, 0)
+        return True
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return True
+    except OSError:
+        return False
+
+
+def bot_lock_status(clean_stale: bool = False) -> dict[str, int | bool | None]:
+    """Return lock ownership and optionally remove only a confirmed stale lock."""
+    path = _lock_path()
+    if not os.path.exists(path):
+        return {"locked": False, "pid": None, "stale": False}
+    pid = _read_lock_pid(path)
+    active = pid is not None and _pid_is_running(pid)
+    stale = not active
+    if stale and clean_stale:
+        try:
+            if _read_lock_pid(path) == pid:
+                os.remove(path)
+        except OSError:
+            pass
+        return {"locked": False, "pid": pid, "stale": True}
+    return {"locked": active, "pid": pid, "stale": stale}
+
+
+def _acquire_bot_lock() -> bool:
+    """Acquire the lock atomically and never overwrite another process's lock."""
+    global _bot_lock_acquired
+    path = _lock_path()
+    os.makedirs(DATA_DIR, exist_ok=True)
+
+    for _ in range(2):
+        try:
+            fd = os.open(path, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
+        except FileExistsError:
+            status = bot_lock_status(clean_stale=True)
+            if status["stale"]:
+                print(f"{Fore.YELLOW}[LOCK] Clearing stale lock file (PID: {status['pid']}){Style.RESET_ALL}")
+                continue
+            pid = status["pid"] or "unknown"
+            print(
+                f"{Fore.RED}[LOCK] A bot instance is already running (PID: {pid})."
+                f"\n[LOCK] Stop that instance before starting another one.{Style.RESET_ALL}"
+            )
+            return False
+        except OSError as exc:
+            print(f"{Fore.RED}[LOCK] Cannot create lock file: {exc}{Style.RESET_ALL}")
+            return False
+
+        try:
+            with os.fdopen(fd, "w", encoding="utf-8") as file:
+                file.write(str(os.getpid()))
+            _bot_lock_acquired = True
+            atexit.register(_release_bot_lock)
+            return True
+        except OSError as exc:
+            try:
+                os.close(fd)
+            except OSError:
+                pass
+            print(f"{Fore.RED}[LOCK] Cannot write lock file: {exc}{Style.RESET_ALL}")
+            return False
+    return False
+
+
+def _release_bot_lock():
+    """Release only the lock written by this process."""
+    global _bot_lock_acquired
+    path = _lock_path()
+    if not _bot_lock_acquired:
+        return
+    try:
+        if _read_lock_pid(path) == os.getpid():
+            os.remove(path)
+    except OSError:
+        pass
+    finally:
+        _bot_lock_acquired = False
