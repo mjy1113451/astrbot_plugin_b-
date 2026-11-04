@@ -51,9 +51,14 @@ def is_our_panel(port: int, timeout: float = 1.0) -> bool:
 
 
 def find_available_port(preferred: int, attempts: int = 20) -> int:
-    """Return the preferred port or a nearby free port without disturbing its owner."""
+    """Return the preferred port or a nearby usable port without disturbing its owner.
+
+    若端口已被本面板占用则直接复用，避免重复启动实例；被其他服务占用则跳过。
+    """
     for port in range(preferred, min(65536, preferred + max(1, attempts))):
         if not is_port_open(port):
+            return port
+        if is_our_panel(port):
             return port
     raise RuntimeError(f"端口 {preferred}-{preferred + attempts - 1} 均被占用")
 
