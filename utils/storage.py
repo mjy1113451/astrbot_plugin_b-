@@ -14,10 +14,41 @@ json_utils.py — 线程安全的 JSON 文件读写工具
 
 import json
 import os
+import tempfile
 import threading
 import time
 from pathlib import Path
 from typing import Any, Optional
+
+
+_PATH_LOCKS: dict = {}
+_PATH_LOCKS_GUARD = threading.Lock()
+
+
+def _lock_for(path: Path) -> threading.Lock:
+    """按规范化路径共享锁：同一文件的所有 JsonStore 实例共用一把锁。"""
+    key = str(path.resolve())
+    with _PATH_LOCKS_GUARD:
+        return _PATH_LOCKS.setdefault(key, threading.Lock())
+
+
+def _write_atomic(path: Path, data: Any) -> None:
+    """原子写入 JSON：唯一后缀临时文件 + replace，避免并发写互相覆盖。"""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    fd, tmp_name = tempfile.mkstemp(
+        dir=str(path.parent), prefix=path.name + ".", suffix=".tmp"
+    )
+    tmp = Path(tmp_name)
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
+            json.dump(data, f, ensure_ascii=False, indent=2)
+        tmp.replace(path)
+    except Exception:
+        try:
+            tmp.unlink(missing_ok=True)
+        except OSError:
+            pass
+        raise
 
 
 class JsonStore:
@@ -27,7 +58,7 @@ class JsonStore:
         if isinstance(path, str):
             path = Path(path)
         self._path = path
-        self._lock = threading.Lock()
+        self._lock = _lock_for(path)
 
     @property
     def path(self) -> Path:
@@ -48,13 +79,10 @@ class JsonStore:
         return default if default is not None else {}
 
     def write(self, data: Any) -> bool:
-        """原子写入 JSON（先写临时文件再重命名）。"""
+        """原子写入 JSON（先写唯一临时文件再重命名）。"""
         with self._lock:
             try:
-                self._path.parent.mkdir(parents=True, exist_ok=True)
-                tmp = self._path.with_suffix(".tmp")
-                tmp.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
-                tmp.replace(self._path)
+                _write_atomic(self._path, data)
                 return True
             except Exception as e:
                 import sys
@@ -79,10 +107,7 @@ class JsonStore:
                 print(f"[JSON] update 回调异常 {self._path.name}: {e}", file=sys.stderr, flush=True)
                 return False
             try:
-                self._path.parent.mkdir(parents=True, exist_ok=True)
-                tmp = self._path.with_suffix(".tmp")
-                tmp.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
-                tmp.replace(self._path)
+                _write_atomic(self._path, data)
                 return True
             except Exception as e:
                 import sys
