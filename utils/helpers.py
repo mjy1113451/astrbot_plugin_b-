@@ -4,6 +4,7 @@ import shutil
 import json
 import re
 import random
+import tempfile
 from datetime import datetime
 from pathlib import Path
 
@@ -84,13 +85,29 @@ def _load_json_file(path, default=None):
 
 
 def _save_json_file(path, data):
-    """原子写入 JSON 文件（先写临时文件再重命名）"""
+    """原子写入 JSON 文件（先写唯一临时文件再重命名）。
+
+    使用 tempfile.mkstemp 生成带唯一后缀的临时文件，避免多进程/多实例
+    并发写同一路径时共用 `<path>.tmp` 导致互相覆盖或 rename 交错。
+    """
     try:
-        os.makedirs(os.path.dirname(path) or '.', exist_ok=True)
-        tmp_path = f"{path}.tmp"
-        with open(tmp_path, "w", encoding="utf-8") as f:
-            json.dump(data, f, ensure_ascii=False, indent=2)
-        os.replace(tmp_path, path)
+        parent = os.path.dirname(path) or '.'
+        os.makedirs(parent, exist_ok=True)
+        fd, tmp_path = tempfile.mkstemp(
+            dir=parent,
+            prefix=os.path.basename(path) + '.',
+            suffix='.tmp',
+        )
+        try:
+            with os.fdopen(fd, "w", encoding="utf-8") as f:
+                json.dump(data, f, ensure_ascii=False, indent=2)
+            os.replace(tmp_path, path)
+        except OSError:
+            try:
+                os.unlink(tmp_path)
+            except OSError:
+                pass
+            raise
         return True
     except OSError:
         return False
@@ -178,7 +195,6 @@ def find_ffmpeg() -> str | None:
             for exe in winget_base.rglob('ffmpeg.exe'):
                 if _try_path(str(exe)):
                     return str(exe)
-                break  # 只试第一个
     except Exception:
         pass
 
