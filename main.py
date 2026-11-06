@@ -32,6 +32,11 @@ from astrbot.api import logger
 from astrbot.api.event import AstrMessageEvent, filter
 from astrbot.api.star import Context, Star
 
+# 插件版本的代码侧唯一来源，必须与 metadata.yaml 的 version 保持一致。
+# 其它位置（CLI 横幅、文档、依赖清单）不再硬编码版本号，升级时只改这里和
+# metadata.yaml 两处。
+PLUGIN_VERSION = "3.1.6"
+
 # AstrBot 核心提供的依赖（插件 requirements.txt 不再声明，见 issues #18/#20）。
 # 值依次为 pip 包名（用于提示）与核心 v4.29.1 声明的最低版本。
 _CORE_PROVIDED_DEPENDENCIES = {
@@ -176,6 +181,9 @@ def _on_brain_done(task: asyncio.Task) -> None:
 
 
 class BilibiliLearningBot(Star):
+    # 插件信息注册处：版本只从 metadata.yaml / PLUGIN_VERSION 获取。
+    version = PLUGIN_VERSION
+
     def __init__(self, context: Context, config=None):
         super().__init__(context)
         self.config = config

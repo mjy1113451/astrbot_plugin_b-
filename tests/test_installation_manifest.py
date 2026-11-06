@@ -5,7 +5,6 @@ import unittest
 
 from packaging.requirements import Requirement
 from packaging.utils import canonicalize_name
-from packaging.version import Version
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -43,23 +42,21 @@ class InstallationManifestTests(unittest.TestCase):
         )
         self.assertTrue(all(canonicalize_name(item.name) in CORE_PACKAGES for item in requirements))
 
-    def test_release_version_is_new_and_consistent(self):
-        version = (ROOT / "VERSION").read_text(encoding="utf-8").strip()
-        self.assertGreater(Version(version), Version("3.1.5"))
+    def test_version_is_defined_only_in_metadata_and_main(self):
+        main_source = (ROOT / "main.py").read_text(encoding="utf-8")
+        match = re.search(r'(?m)^PLUGIN_VERSION = "([^"]+)"$', main_source)
+        self.assertIsNotNone(match, "main.py 必须声明 PLUGIN_VERSION")
+        version = match.group(1)
+
         metadata = (ROOT / "metadata.yaml").read_text(encoding="utf-8")
         self.assertRegex(metadata, rf"(?m)^version: {re.escape(version)}\s*$")
         self.assertIn('astrbot_version: ">=4.29.1,<5"', metadata)
-        readme = (ROOT / "README.md").read_text(encoding="utf-8")
-        self.assertIn(f"> 版本: **{version}**", readme)
-        self.assertIn(f"> Version: **{version}**", readme)
-        self.assertIn(f"当前 {version}", readme)
-        self.assertIn(f"current {version}", readme)
-        self.assertIn(
-            f"v{version} 依赖清单",
-            (ROOT / "requirements.txt").read_text(encoding="utf-8"),
-        )
-        self.assertIn(f"版本: v{version} ", (ROOT / "cli/app.py").read_text(encoding="utf-8"))
-        self.assertIn(f"## {version} —", (ROOT / "CHANGELOG.md").read_text(encoding="utf-8"))
+
+        # 版本只允许出现在 metadata.yaml 与 main.py 的注册处。
+        self.assertFalse((ROOT / "VERSION").exists())
+        for filename in ("README.md", "requirements.txt", "cli/app.py"):
+            with self.subTest(filename=filename):
+                self.assertNotIn(version, (ROOT / filename).read_text(encoding="utf-8"))
 
 
 if __name__ == "__main__":
