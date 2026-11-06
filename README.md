@@ -166,9 +166,12 @@ astrbot_plugin_b--main/
 └── CHANGELOG.md            # 版本更新记录
 ```
 
-测试运行：
+版本约定：`main.py` 中只声明一次字符串常量 `PLUGIN_VERSION`，`metadata.yaml` 中只定义一次顶层 `version`，两者必须一致。`CHANGELOG.md` 允许保留历史版本号，但最新发布标题必须匹配当前版本；README、依赖清单和 CLI 不再硬编码当前版本。
+
+测试运行（只需安装测试用的 `packaging` 和 `PyYAML`，无需安装 AstrBot 或完整业务依赖）：
 
 ```bash
+python -m pip install packaging PyYAML
 python -m unittest discover -s tests -v
 ```
 
