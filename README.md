@@ -2,7 +2,7 @@
 
 > AstrBot 插件：让 AI 在后台刷 B 站推荐流、理解视频内容、整理知识库、回复评论与私信，并支持独立 CLI 运行。
 
-- 版本：**3.1.6**
+- 版本：见 `metadata.yaml` 的 `version`（代码侧对应 `main.py` 的 `PLUGIN_VERSION`）
 - 许可证：MIT
 - 兼容：AstrBot `>=4.29.1,<5`（见 `metadata.yaml`）
 - 上游项目：[bilibili_learning_bot](https://github.com/xiaoyaya191/bilibili_learning_bot)（改写已获原作者同意）
@@ -132,7 +132,7 @@ git clone https://github.com/mjy1113451/astrbot_plugin_b-.git
 
 若 AstrBot v4.29.3 报 `openai==2.33.0` 与核心保护的 `openai==2.46.0` 冲突：
 
-1. 确认使用的是 **3.1.6** 源码包：核对包内 `metadata.yaml` 的 `version` 与 `VERSION` 均为 `3.1.6`。若插件市场仍显示旧版本，请刷新来源并强制更新；自定义源若配置了固定 `download_url`，需要同步更新地址。
+1. 确认源码包版本：包内 `metadata.yaml` 的 `version` 与 `main.py` 的 `PLUGIN_VERSION` 必须一致。若插件市场仍显示旧版本，请刷新来源并强制更新；自定义源若配置了固定 `download_url`，需要同步更新地址。
 2. 在日志给出的**实际安装目录**检查 `requirements.txt`，不应出现 `openai` 等核心包的直接声明。
 3. 在 AstrBot 同一 Python 环境中只解析不安装，验证依赖链：
 
@@ -209,8 +209,8 @@ API Key、Cookie 等凭据仅保存在本地，请勿公开分享。
 
 **Bilibili Learning Bot for AstrBot** — an AI that browses Bilibili's recommendation feed, understands videos, organizes a knowledge base, replies to comments and DMs, and can also run standalone from the CLI.
 
-- Version **3.1.6**, MIT license, requires AstrBot `>=4.29.1,<5`.
+- Version is defined in `metadata.yaml` (`version`) and mirrored by `PLUGIN_VERSION` in `main.py`; MIT license, requires AstrBot `>=4.29.1,<5`.
 - Commands: `/bili_start`, `/bili_stop`, `/bili_status`, `/bili_analyze`, `/bili_up_learn`, `/bili_video2html`, `/bili_kb_*`, `/bili_asr`, `/bili_quiet`, `/bili_vision`, `/bili_fast`, `/bili_interest`, `/bili_comment`, `/bili_export`, `/bili_import`, `/bili_reset`, `/bili_login`.
 - Private data lives in `%LOCALAPPDATA%\BiliLearn\Data` (override with `BILI_USER_DATA_DIR`).
 - Plugin panel settings take effect only when `use_astrbot_config` is enabled and the relevant groups are listed in `apply_sections`.
-- For installation dependency conflicts, verify that the installed package is version 3.1.6 and that `requirements.txt` does not redeclare core-provided packages.
+- For installation dependency conflicts, verify that `metadata.yaml` and `main.py` report the same version as the installed package and that `requirements.txt` does not redeclare core-provided packages.

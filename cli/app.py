@@ -21,6 +21,19 @@ from io import BytesIO
 import colorama
 from colorama import Fore, Style
 
+
+def _plugin_version() -> str:
+    """从 metadata.yaml 读取插件版本，避免在 CLI 横幅里硬编码版本号。"""
+    try:
+        meta = Path(__file__).resolve().parents[1] / "metadata.yaml"
+        for line in meta.read_text(encoding="utf-8").splitlines():
+            if line.startswith("version:"):
+                return line.split(":", 1)[1].strip()
+    except OSError:
+        pass
+    return "unknown"
+
+
 # ===== 模块化导入 =====
 from persona.managers import PersonaManager, MoodManager, UserProfileManager, BotDiaryManager, SelfEvolutionManager, PrivateContextDB
 from security.guard import ReplySafetyGuard
@@ -1032,7 +1045,7 @@ def show_main_menu():
     print(f"""
     ╔══════════════════════════════════════════════════════════╗
     ║           bilibili_learning_bot - B站学习互动机器人     ║
-    ║               版本: v3.1.6 B站视频学习版                ║
+    ║               版本: v{_plugin_version()} B站视频学习版                ║
     ║  特性: B站视频分析+智能兴趣引擎+投币管控+19种风格+知识库   ║
     ╠══════════════════════════════════════════════════════════╣
     ╚══════════════════════════════════════════════════════════╝
