@@ -44,15 +44,25 @@ class InstallationManifestTests(unittest.TestCase):
 
     def test_version_is_defined_only_in_metadata_and_main(self):
         main_source = (ROOT / "main.py").read_text(encoding="utf-8")
-        match = re.search(r'(?m)^PLUGIN_VERSION = "([^"]+)"$', main_source)
-        self.assertIsNotNone(match, "main.py 必须声明 PLUGIN_VERSION")
-        version = match.group(1)
+        # main.py 中 PLUGIN_VERSION 只能声明一次。
+        version_decls = re.findall(r'(?m)^PLUGIN_VERSION\s*=\s*"([^"]+)"\s*$', main_source)
+        self.assertEqual(len(version_decls), 1, "main.py 必须且只能声明一次 PLUGIN_VERSION")
+        version = version_decls[0]
 
+        # metadata.yaml 中 version 只能定义一次，且值与 PLUGIN_VERSION 一致。
         metadata = (ROOT / "metadata.yaml").read_text(encoding="utf-8")
-        self.assertRegex(metadata, rf"(?m)^version: {re.escape(version)}\s*$")
+        metadata_versions = re.findall(r'(?m)^version:\s*(.+?)\s*$', metadata)
+        self.assertEqual(len(metadata_versions), 1, "metadata.yaml 中 version 必须且只能定义一次")
+        self.assertEqual(metadata_versions[0].strip('"'), version)
         self.assertIn('astrbot_version: ">=4.29.1,<5"', metadata)
 
-        # 版本只允许出现在 metadata.yaml 与 main.py 的注册处。
+        # CHANGELOG 允许保留历史版本号，但最新一条发布记录必须与当前版本一致。
+        changelog = (ROOT / "CHANGELOG.md").read_text(encoding="utf-8")
+        latest = re.search(r'(?m)^##\s+([^\s—]+)\s*[—-]', changelog)
+        self.assertIsNotNone(latest, "CHANGELOG.md 缺少最新版本标题")
+        self.assertEqual(latest.group(1).strip(), version)
+
+        # VERSION 文件已移除，其它文件不允许再出现当前版本号。
         self.assertFalse((ROOT / "VERSION").exists())
         for filename in ("README.md", "requirements.txt", "cli/app.py"):
             with self.subTest(filename=filename):
@@ -61,3 +71,4 @@ class InstallationManifestTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
