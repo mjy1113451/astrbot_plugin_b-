@@ -71,20 +71,22 @@ def read_metadata(source):
 
 
 def read_latest_changelog_version(source):
+    versions = []
     for heading in re.findall(r"(?m)^##[ \t]+(\S+)", source):
         try:
-            Version(heading)
+            versions.append(Version(heading))
         except InvalidVersion:
             continue
-        return heading
-    raise ValueError("CHANGELOG.md 缺少发布版本标题")
+    if not versions:
+        raise ValueError("CHANGELOG.md 缺少发布版本标题")
+    return max(versions)
 
 
 def validate_release_versions(main_source, metadata_source, changelog_source):
     version = read_plugin_version(main_source)
     if read_metadata(metadata_source)["version"] != version:
         raise ValueError("metadata.yaml 的 version 必须与 PLUGIN_VERSION 一致")
-    if read_latest_changelog_version(changelog_source) != version:
+    if read_latest_changelog_version(changelog_source) != Version(version):
         raise ValueError("CHANGELOG.md 最新发布版本必须与 PLUGIN_VERSION 一致")
     return version
 
@@ -223,13 +225,40 @@ class VersionSourceRegressionTests(unittest.TestCase):
                 'PLUGIN_VERSION = "3.1.6"', 'version: "3.1.7"', '## 3.1.6 — 发布\n',
             )
 
-    def test_release_checks_first_published_heading_not_a_matching_historical_one(self):
+    def test_changelog_selects_highest_version_regardless_of_heading_order(self):
+        main_source = 'PLUGIN_VERSION = "3.1.6"'
+        metadata = 'version: "3.1.6"'
+        for headings in (
+            ("## 3.1.6 — 最新版", "## 3.1.2 历史版本"),
+            ("## 3.1.2 历史版本", "## 3.1.6 — 最新版"),
+        ):
+            changelog = '# 更新日志\n\n## 未发布\n\n' + '\n\n'.join(headings)
+            with self.subTest(headings=headings):
+                self.assertEqual(validate_release_versions(main_source, metadata, changelog), "3.1.6")
+
+    def test_release_rejects_newer_changelog_version_in_either_order(self):
         for title in ("## 3.1.7 — 新版本", "## 3.1.7 正式发布版", "## 3.1.7"):
-            changelog = f'# 更新日志\n\n## 未发布\n\n{title}\n\n## 3.1.6 — 历史版本\n'
-            with self.subTest(title=title), self.assertRaisesRegex(ValueError, "最新发布版本"):
-                validate_release_versions(
-                    'PLUGIN_VERSION = "3.1.6"', 'version: "3.1.6"', changelog,
-                )
+            for headings in ((title, "## 3.1.6 — 当前"), ("## 3.1.6 — 当前", title)):
+                changelog = '# 更新日志\n\n## 未发布\n\n' + '\n\n'.join(headings)
+                with self.subTest(headings=headings), self.assertRaisesRegex(ValueError, "最新发布版本"):
+                    validate_release_versions(
+                        'PLUGIN_VERSION = "3.1.6"', 'version: "3.1.6"', changelog,
+                    )
+
+    def test_changelog_uses_pep440_version_order(self):
+        changelog = (
+            '## 未发布\n## not-a-version\n## 3.1.9\n## 3.1.10rc1\n'
+            '## 3.1.10\n## 3.1.2\n'
+        )
+        self.assertEqual(read_latest_changelog_version(changelog), Version("3.1.10"))
+        self.assertEqual(validate_release_versions(
+            'PLUGIN_VERSION = "3.1.10"', 'version: "3.1.10"', changelog,
+        ), "3.1.10")
+
+    def test_changelog_accepts_equivalent_pep440_spellings(self):
+        self.assertEqual(validate_release_versions(
+            'PLUGIN_VERSION = "3.1.6"', 'version: "3.1.6"', '## v3.1.6 — 发布\n',
+        ), "3.1.6")
 
     def test_changelog_requires_a_release_heading(self):
         with self.assertRaisesRegex(ValueError, "缺少发布版本"):
