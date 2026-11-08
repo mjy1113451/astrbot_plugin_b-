@@ -23,7 +23,7 @@ def read_requirements(text):
     return requirements
 
 
-def find_hardcoded_plugin_version(text, version, filename):
+def find_hardcoded_plugin_version(text, version, filename, dependency_names=()):
     number = re.escape(version) + r"(?![a-z0-9_+!-]|\.[a-z0-9])"
     value = r"(?:\*{1,2}[ \t]*)?[`\"']?[vV]?" + number
     label = (
@@ -62,7 +62,7 @@ def find_hardcoded_plugin_version(text, version, filename):
         pattern = (
             r"(?m)^[ \t]*(?:[-*>|][ \t]*)?(?:\*{1,2})?" + label + value
             + r"|(?<![\w])(?:当前|current)[ \t]+" + value
-            + r"|^[ \t]*(?:[-*>|][ \t]*)?Version[ \t]+" + value
+            + r"|(?<![a-z0-9_])Version[ \t]+" + value
         )
     elif filename == "requirements.txt":
         pattern = (
@@ -72,8 +72,15 @@ def find_hardcoded_plugin_version(text, version, filename):
         )
     else:
         raise ValueError(f"不支持的版本检查文件: {filename}")
-    match = re.search(pattern, text, re.IGNORECASE)
-    return match.group(0) if match else None
+    dependencies = {canonicalize_name(name) for name in dependency_names}
+    for match in re.finditer(pattern, text, re.IGNORECASE):
+        if filename == "README.md":
+            prefix = text[:match.start()].rsplit("\n", 1)[-1]
+            previous_word = re.search(r"([a-z0-9][a-z0-9_.-]*)[ \t]+$", prefix, re.IGNORECASE)
+            if previous_word and canonicalize_name(previous_word.group(1)) in dependencies:
+                continue
+        return match.group(0)
+    return None
 
 
 class InstallationManifestTests(unittest.TestCase):
@@ -118,10 +125,15 @@ class InstallationManifestTests(unittest.TestCase):
 
         # VERSION 文件已移除，其它文件不允许硬编码当前插件版本声明。
         self.assertFalse((ROOT / "VERSION").exists())
+        dependency_names = CORE_PACKAGES | {"AstrBot"} | {
+            requirement.name for requirement in read_requirements(
+                (ROOT / "requirements.txt").read_text(encoding="utf-8")
+            )
+        }
         for filename in ("README.md", "requirements.txt", "cli/app.py"):
             with self.subTest(filename=filename):
                 text = (ROOT / filename).read_text(encoding="utf-8")
-                match = find_hardcoded_plugin_version(text, version, filename)
+                match = find_hardcoded_plugin_version(text, version, filename, dependency_names)
                 self.assertIsNone(match, f"{filename} 硬编码了插件版本: {match}")
 
 
@@ -179,6 +191,46 @@ class HardcodedPluginVersionTests(unittest.TestCase):
         for filename, text, version in cases:
             with self.subTest(filename=filename, text=text, version=version):
                 self.assertIsNone(find_hardcoded_plugin_version(text, version, filename))
+
+    def test_inline_readme_versions_are_detected(self):
+        for text in (
+            'Some text Version **3.1.6**',
+            '| Version **3.1.6** |',
+            '| 插件 | Version **3.1.6** |',
+            'Plugin information (Version `3.1.6`).',
+        ):
+            with self.subTest(text=text):
+                self.assertIsNotNone(find_hardcoded_plugin_version(text, "3.1.6", "README.md"))
+
+    def test_inline_readme_versions_preserve_token_boundaries(self):
+        for text in (
+            'Some text Version **3.1.60**',
+            'Some text Version **3.1.6rc1**',
+            'Some text Version **3.1.6+local**',
+            'Some text Version **13.1.6**',
+            'Some text LibraryVersion **3.1.6**',
+            'Some text schema_version **3.1.6**',
+        ):
+            with self.subTest(text=text):
+                self.assertIsNone(find_hardcoded_plugin_version(text, "3.1.6", "README.md"))
+        self.assertIsNone(find_hardcoded_plugin_version(
+            'Some text Version **3.1.6**', "3.1", "README.md",
+        ))
+
+    def test_named_dependency_does_not_hide_a_later_plugin_declaration(self):
+        dependencies = {"Flask", "httpx", "python-docx", "AstrBot"}
+        for name in ("Flask", "HTTPX", "python_docx", "AstrBot"):
+            text = f'{name} Version v3.1.6'
+            with self.subTest(dependency=name):
+                self.assertIsNone(find_hardcoded_plugin_version(
+                    text, "3.1.6", "README.md", dependencies,
+                ))
+                combined = text + '\nSome text Version **3.1.6**'
+                self.assertEqual(find_hardcoded_plugin_version(
+                    combined, "3.1.6", "README.md", dependencies,
+                ), find_hardcoded_plugin_version(
+                    'Some text Version **3.1.6**', "3.1.6", "README.md",
+                ))
 
     def test_runtime_versions_are_derived_from_plugin_version(self):
         main_source = (ROOT / "main.py").read_text(encoding="utf-8")
