@@ -7,7 +7,7 @@ import uuid
 from datetime import datetime
 from pathlib import Path
 
-from core.user_data import DATA_DIR
+from ..core.user_data import DATA_DIR
 
 
 _LOCK = threading.RLock()

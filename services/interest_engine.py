@@ -17,7 +17,7 @@ from datetime import datetime
 from dataclasses import dataclass, field
 from typing import List, Dict, Optional, Tuple, Set
 from colorama import Fore, Style
-from core.user_data import DATA_DIR
+from ..core.user_data import DATA_DIR
 
 # ── 默认配置 ──
 DEFAULT_ENGINE_CONFIG = {

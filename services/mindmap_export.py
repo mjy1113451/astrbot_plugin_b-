@@ -11,7 +11,7 @@ from pathlib import Path
 from typing import Any
 
 BASE_DIR = Path(__file__).resolve().parent.parent
-from core.user_data import MINDMAPS_DIR
+from ..core.user_data import MINDMAPS_DIR
 
 DEFAULT_OUTPUT_DIR = MINDMAPS_DIR
 
@@ -95,7 +95,7 @@ async def _ai_outline_async(markdown: str, prompt: str) -> str | None:
     """用本项目统一 AI 客户端把笔记转换为更利于思维导图的大纲（标题层级）。
     复用 services/_services_ai.py 的 call_ai()，不再依赖外部 xingye_bot。"""
     try:
-        from services._services_ai import call_ai
+        from ._services_ai import call_ai
 
         system = (
             "你负责把知识笔记转换为思维导图大纲，只输出 Markdown 标题层级（#/##/###）和要点列表。\n"

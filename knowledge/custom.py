@@ -2,12 +2,12 @@
 import asyncio, json, os, re, time, hashlib
 from datetime import datetime
 from colorama import Fore, Style
-from core.config import config, save_config, KNOWLEDGE_BASE_DIR
-from core.user_data import USER_DATA_DIR
-from utils.display import log
-from utils.helpers import sanitize_filename, _mask_urls
-from knowledge.classifier import KnowledgeBaseClassifier
-from knowledge.web_search import web_search
+from ..core.config import config, save_config, KNOWLEDGE_BASE_DIR
+from ..core.user_data import USER_DATA_DIR
+from ..utils.display import log
+from ..utils.helpers import sanitize_filename, _mask_urls
+from .classifier import KnowledgeBaseClassifier
+from .web_search import web_search
 
 CUSTOM_KNOWLEDGE_DIR = os.path.join(KNOWLEDGE_BASE_DIR, "自定义知识")
 KB_METADATA_FILE = str(USER_DATA_DIR / "knowledge_metadata.json")
@@ -15,7 +15,7 @@ KB_METADATA_FILE = str(USER_DATA_DIR / "knowledge_metadata.json")
 # ── 统一 AI 调用（不再依赖 openai / xingye_bot） ──
 async def _ai_chat(messages, model="", timeout=120, temperature=0.7, max_tokens=4096):
     """一次性 AI 调用，返回 content 字符串。"""
-    from services._services_ai import call_ai
+    from ..services._services_ai import call_ai
     return await call_ai(messages=messages, model=model, timeout=timeout,
                          temperature=temperature, max_tokens=max_tokens, verbose=False)
 
@@ -149,7 +149,7 @@ async def _ai_search_bilibili_and_add():
         search_queries = [topic]
 
     # 3. 搜索B站
-    from brain.agent_brain import AgentBrain  # 延迟导入，避免循环依赖
+    from ..brain.agent_brain import AgentBrain  # 延迟导入，避免循环依赖
     brain = AgentBrain()
     all_results = []
     seen_bvids = set()
@@ -218,7 +218,7 @@ async def _ai_search_bilibili_and_add():
         print(f"\n{Fore.CYAN}[{idx}/{len(chosen)}] 正在分析: {title[:40]}...{Style.RESET_ALL}")
         
         # 获取字幕
-        from api.subtitles import fetch_bilibili_subtitles  # 延迟导入，避免循环依赖
+        from ..api.subtitles import fetch_bilibili_subtitles  # 延迟导入，避免循环依赖
         subtitle_ok, subtitle_text, video_desc, ai_verified = await fetch_bilibili_subtitles(
             bvid, cookies_obj=brain.cookies, title=title
         )
@@ -454,7 +454,7 @@ async def _add_custom_knowledge():
     
     # 更新向量索引
     try:
-        from brain.agent_brain import AgentBrain  # 延迟导入，避免循环依赖
+        from ..brain.agent_brain import AgentBrain  # 延迟导入，避免循环依赖
         brain = AgentBrain()
         if brain.kb_search:
             await brain.kb_search.update_entry(filepath)
@@ -649,7 +649,7 @@ async def _edit_custom_knowledge(entries):
     
     # 更新向量索引
     try:
-        from brain.agent_brain import AgentBrain  # 延迟导入，避免循环依赖
+        from ..brain.agent_brain import AgentBrain  # 延迟导入，避免循环依赖
         brain = AgentBrain()
         if brain.kb_search:
             await brain.kb_search.update_entry(new_filepath)

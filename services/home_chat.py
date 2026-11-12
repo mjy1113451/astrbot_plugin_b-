@@ -23,8 +23,8 @@ from pathlib import Path
 from typing import Any
 
 BASE_DIR = Path(__file__).resolve().parent.parent
-from core.config import resolve_knowledge_base_dir
-from core.user_data import DATA_DIR, USER_DATA_DIR
+from ..core.config import resolve_knowledge_base_dir
+from ..core.user_data import DATA_DIR, USER_DATA_DIR
 
 CONV_DIR = DATA_DIR / "HomeChat"
 LEARNING_LOG_FILE = USER_DATA_DIR / "learning_log.md"
@@ -222,7 +222,7 @@ def detect_intent(message: str) -> str:
 # ─────────────────────────────────────────────
 async def _call_llm(system: str, user: str, history: list[dict] | None = None,
                     model: str = "", temperature: float | None = None) -> str:
-    from services._services_ai import call_ai
+    from ._services_ai import call_ai
     messages = [{"role": "system", "content": system}]
     if history:
         for h in history:
@@ -239,7 +239,7 @@ async def _call_llm(system: str, user: str, history: list[dict] | None = None,
 
 def _retrieve(query: str, cfg: dict | None, n: int = 4) -> list[dict[str, Any]]:
     try:
-        from services.rag_qa import retrieve_chunks
+        from .rag_qa import retrieve_chunks
         kb_dir = _resolve_kb_dir(cfg)
         return retrieve_chunks(query, max_chunks=n, kb_root=kb_dir)
     except Exception:
@@ -321,7 +321,7 @@ def _history_for_context(conv: dict, context_mode: str) -> list[dict]:
 # ─────────────────────────────────────────────
 async def _agent_mode(message: str, cfg: dict | None, ctx: dict[str, Any]) -> dict[str, Any]:
     try:
-        from services.agent_service import AgentSkillRunner
+        from .agent_service import AgentSkillRunner
         runner = AgentSkillRunner()
         result = await runner.run_goal(message)
         steps = result.get("results", []) if isinstance(result, dict) else []

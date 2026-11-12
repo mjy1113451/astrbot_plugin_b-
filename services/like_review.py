@@ -175,7 +175,7 @@ class ActionReviewInbox:
                 config = json.loads((self.path.parent / "config.json").read_text(encoding="utf-8"))
                 notify_enabled = (config.get("approval_review") or {}).get("desktop_notification", True)
                 if notify_enabled is not False:
-                    from utils.desktop_notifications import enqueue
+                    from ..utils.desktop_notifications import enqueue
                     enqueue(self.path.parent, "BiliLearn approval needed", f"{row['action_label']}: {row['title']}")
             except (OSError, json.JSONDecodeError):
                 pass

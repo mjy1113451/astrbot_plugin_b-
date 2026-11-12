@@ -28,6 +28,22 @@ import sys
 import traceback
 from importlib import metadata as importlib_metadata
 
+if not __package__:
+    import hashlib
+    import importlib.util
+    from pathlib import Path
+
+    _root = Path(__file__).resolve().parent
+    _package_name = "_bili_learning_" + hashlib.sha256(str(_root).encode()).hexdigest()[:16]
+    if _package_name not in sys.modules:
+        _spec = importlib.util.spec_from_file_location(
+            _package_name, _root / "__init__.py", submodule_search_locations=[str(_root)]
+        )
+        _package = importlib.util.module_from_spec(_spec)
+        sys.modules[_package_name] = _package
+        _spec.loader.exec_module(_package)
+    __package__ = _package_name
+
 from astrbot.api import logger
 from astrbot.api.event import AstrMessageEvent, filter
 from astrbot.api.star import Context, Star
@@ -124,7 +140,7 @@ def _cli_app():
     Raises:
         ImportError: CLI 依赖不可用时抛出。
     """
-    import cli.app as app
+    from .cli import app
 
     return app
 
@@ -228,10 +244,10 @@ class BilibiliLearningBot(Star):
 
             try:
                 if self.config is not None:
-                    from core.astrbot_config_bridge import apply_astrbot_config
+                    from .core.astrbot_config_bridge import apply_astrbot_config
 
                     apply_astrbot_config(self.config)
-                from brain.agent_brain import AgentBrain
+                from .brain.agent_brain import AgentBrain
 
                 brain = AgentBrain()
             except Exception as exc:
@@ -320,8 +336,8 @@ class BilibiliLearningBot(Star):
         try:
             import os
 
-            from core.config import KNOWLEDGE_BASE_DIR
-            from knowledge.browse import count_knowledge_categories
+            from .core.config import KNOWLEDGE_BASE_DIR
+            from .knowledge.browse import count_knowledge_categories
 
             if not os.path.isdir(KNOWLEDGE_BASE_DIR):
                 yield event.plain_result("ℹ️ 知识库为空，还没有归档任何视频。")
@@ -354,7 +370,7 @@ class BilibiliLearningBot(Star):
     async def kb_revisit(self, event: AstrMessageEvent):
         """重温知识库。"""
         try:
-            from knowledge.revisit import revisit_knowledge_base_menu
+            from .knowledge.revisit import revisit_knowledge_base_menu
 
             await revisit_knowledge_base_menu()
         except Exception as exc:
@@ -367,7 +383,7 @@ class BilibiliLearningBot(Star):
     async def kb_organize(self, event: AstrMessageEvent):
         """整理知识库。"""
         try:
-            from knowledge.organize import organize_knowledge_base
+            from .knowledge.organize import organize_knowledge_base
 
             await organize_knowledge_base()
         except Exception as exc:
@@ -385,7 +401,7 @@ class BilibiliLearningBot(Star):
             )
             return
         try:
-            from knowledge.custom import custom_knowledge_menu
+            from .knowledge.custom import custom_knowledge_menu
 
             await self._run_in_thread(custom_knowledge_menu)
         except Exception as exc:
@@ -410,7 +426,7 @@ class BilibiliLearningBot(Star):
             return
 
         try:
-            from brain.video_analysis import analyze_bilibili_video_input
+            from .brain.video_analysis import analyze_bilibili_video_input
 
             await analyze_bilibili_video_input(bvid)
         except Exception as exc:
@@ -433,7 +449,7 @@ class BilibiliLearningBot(Star):
             return
 
         try:
-            from brain.video_analysis import up_homepage_learn
+            from .brain.video_analysis import up_homepage_learn
 
             # 非交互调用：显式给出默认值，避免函数内部三个 input() 阻塞事件循环
             await up_homepage_learn(
@@ -455,7 +471,7 @@ class BilibiliLearningBot(Star):
         用法：/bili_video2html [bvid]
         """
         try:
-            from cli.app import video_to_html_bg
+            from .cli.app import video_to_html_bg
 
             bvid = (bvid or "").strip()
             if not bvid:

@@ -10,19 +10,19 @@ import os, json, re, sys
 from datetime import datetime
 from colorama import Fore, Style
 
-from core.config import config, load_config as _load_config, save_config as _save_config
-from core.user_data import (
+from .config import config, load_config as _load_config, save_config as _save_config
+from .user_data import (
     DATA_DIR as _USER_DATA_DIR,
     HIGHLIGHTS_DIR as _USER_HIGHLIGHTS_DIR,
     KNOWLEDGE_BASE_DIR as _USER_KNOWLEDGE_BASE_DIR,
     USER_DATA_DIR as _USER_DATA_ROOT,
 )
-from core.config import (
+from .config import (
     get_backup_dir, mask_secret, get_config_or_env,
     _get_vision_api_key, _get_vision_base_url, _get_fallback_models,
     resolve_knowledge_base_dir,
 )
-from utils.display import log
+from ..utils.display import log
 
 # ══════════════════════════════════════════════════════════
 # 动态配置映射表：变量名 → (config键路径, 默认值)
@@ -395,7 +395,7 @@ KB_METADATA_FILE = os.path.join(USER_DATA_DIR, "knowledge_metadata.json")
 # 旧静态赋值已删除，NO_HUMAN_DELAY 等变量现在每次访问时实时从 config 字典读取。
 
 # DEFAULT_CONFIG 从 core.config 导入真正的默认模板（而非运行时 config 对象）
-from core.config import DEFAULT_CONFIG  # noqa: E402
+from .config import DEFAULT_CONFIG  # noqa: E402
 
 # ══════════════════════════════════════════════════════════
 # JSON 辅助

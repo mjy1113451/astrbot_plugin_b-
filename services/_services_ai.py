@@ -95,7 +95,7 @@ def _live_config() -> dict:
         # Each long-running worker has its own Python memory.  Read the
         # encrypted config on every request so a provider/model change made in
         # the CLI or web panel applies without a process restart.
-        from core.config import load_config
+        from ..core.config import load_config
         _cfg = load_config()
     except Exception:
         return {}
@@ -147,7 +147,7 @@ async def _call_ai_via_openai(
     import httpx as _httpx
     _proxy_url = ""
     try:
-        from services.proxy_config import get_proxy_url
+        from .proxy_config import get_proxy_url
         _proxy_url = get_proxy_url()
     except Exception:
         pass
@@ -220,7 +220,7 @@ async def _call_ai_via_httpx(
     # 代理支持
     _proxy_url = ""
     try:
-        from services.proxy_config import get_proxy_url
+        from .proxy_config import get_proxy_url
         _proxy_url = get_proxy_url()
     except Exception:
         pass
@@ -424,7 +424,7 @@ async def call_ai_with_tools(
     import httpx as _httpx
     _proxy_url = ""
     try:
-        from services.proxy_config import get_proxy_url
+        from .proxy_config import get_proxy_url
         _proxy_url = get_proxy_url()
     except Exception:
         pass

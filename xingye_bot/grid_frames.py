@@ -32,7 +32,7 @@ def _hidden_subprocess_kwargs() -> dict[str, int]:
     return {"creationflags": flags} if flags else {}
 
 try:
-    from utils.helpers import find_ffmpeg, find_ffprobe
+    from ..utils.helpers import find_ffmpeg, find_ffprobe
 except ImportError:  # pragma: no cover
     find_ffmpeg = None
     find_ffprobe = None

@@ -1,5 +1,5 @@
 """brain/_brain_history.py — AgentBrain 互动视频历史 & 回顾复习 mixin"""
-from brain._mixin_imports import *
+from ._mixin_imports import *
 
 class BrainHistoryMixin:
     """互动视频历史 & 回顾复习"""

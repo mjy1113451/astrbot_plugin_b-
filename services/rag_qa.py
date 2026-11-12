@@ -7,7 +7,7 @@ from pathlib import Path
 from typing import Any
 
 BASE_DIR = Path(__file__).resolve().parent.parent
-from core.config import config as _core_config, resolve_knowledge_base_dir
+from ..core.config import config as _core_config, resolve_knowledge_base_dir
 
 KNOWLEDGE_BASE_DIR = Path(resolve_knowledge_base_dir(_core_config))
 
@@ -151,7 +151,7 @@ async def answer_question(question: str, cfg: dict[str, Any] | None = None) -> d
     if use_fc:
         # ── Function Calling 模式：LLM 自动决定 search_note / open_note ──
         try:
-            from services._services_ai import call_ai_with_tools
+            from ._services_ai import call_ai_with_tools
             system_prompt = (
                 "你是 bilibili_learning_bot 的知识库问答助手。\n"
                 "你有两个工具可用：\n"
@@ -199,7 +199,7 @@ async def answer_question(question: str, cfg: dict[str, Any] | None = None) -> d
 【用户问题】
 {question}"""
         try:
-            from services._services_ai import call_ai
+            from ._services_ai import call_ai
             answer = await call_ai(
                 messages=[{'role': 'user', 'content': prompt}],
                 temperature=0.3,

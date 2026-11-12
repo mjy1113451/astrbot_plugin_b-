@@ -6,9 +6,9 @@ import re
 from datetime import datetime
 from typing import Any, Awaitable, Callable
 
-from core.config import DATA_DIR, load_config
-from utils.display import log
-from utils.storage import JsonStore
+from ..core.config import DATA_DIR, load_config
+from ..utils.display import log
+from ..utils.storage import JsonStore
 
 
 OWNER_SHARE_STATE_FILE = f"{DATA_DIR}/owner_share_state.json"
@@ -83,7 +83,7 @@ async def compose_test_share_message(evidence: dict[str, Any]) -> tuple[str, lis
         "recent_comments": [str(item)[:180] for item in (evidence.get("recent_comments") or [])[:8]],
     }
     try:
-        from services._services_ai import call_ai
+        from ._services_ai import call_ai
         reply = await call_ai(
             [
                 {"role": "system", "content": TEST_SHARE_SYSTEM_PROMPT},
@@ -180,7 +180,7 @@ class OwnerShareService:
             return ""
         extra = str(cfg.get("custom_prompt", "")).strip()
         try:
-            from services._services_ai import call_ai
+            from ._services_ai import call_ai
             response = await call_ai(
                 [
                     {"role": "system", "content": BUILTIN_OWNER_SHARE_PROMPT + (f"\nExtra instruction: {extra}" if extra else "")},

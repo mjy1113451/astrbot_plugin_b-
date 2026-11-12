@@ -5,9 +5,9 @@ import re
 from datetime import datetime
 
 from colorama import Fore, Style
-from core.config import KNOWLEDGE_BASE_DIR, config
-from core.user_data import USER_DATA_DIR
-from utils.display import log
+from ..core.config import KNOWLEDGE_BASE_DIR, config
+from ..core.user_data import USER_DATA_DIR
+from ..utils.display import log
 
 KB_METADATA_FILE = str(USER_DATA_DIR / "knowledge_metadata.json")
 LEARNING_LOG_FILE = str(USER_DATA_DIR / "learning_log.md")

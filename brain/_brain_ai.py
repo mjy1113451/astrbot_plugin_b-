@@ -1,6 +1,6 @@
 """brain/_brain_ai.py — AgentBrain AI后端 & 多Provider mixin"""
-from brain._mixin_imports import *
-from utils.helpers import _mask_urls
+from ._mixin_imports import *
+from ..utils.helpers import _mask_urls
 
 class BrainAIMixin:
     """AI backend methods"""
@@ -29,7 +29,7 @@ class BrainAIMixin:
     def _live_config(self):
         """实时读取 API 配置（绕过 import * 导致的模块级变量缓存问题）。
         每次调用都从 config 字典重新读取，确保用户通过菜单修改后即时生效。"""
-        from core.config import config as _cfg
+        from ..core.config import config as _cfg
         api = _cfg.get("api", {})
         fb_prov = _cfg.get("fallback_provider", {})
         fb_models = _cfg.get("fallback_models", {})
@@ -79,7 +79,7 @@ class BrainAIMixin:
         # 代理支持
         _proxy_url = ""
         try:
-            from services.proxy_config import get_proxy_url
+            from ..services.proxy_config import get_proxy_url
             _proxy_url = get_proxy_url()
         except Exception:
             pass
@@ -137,7 +137,7 @@ class BrainAIMixin:
         # 代理支持
         _proxy_url = ""
         try:
-            from services.proxy_config import get_proxy_url
+            from ..services.proxy_config import get_proxy_url
             _proxy_url = get_proxy_url()
         except Exception:
             pass

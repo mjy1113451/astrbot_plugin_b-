@@ -17,8 +17,8 @@ import random
 from datetime import datetime
 from pathlib import Path as _Path
 
-from brain._mixin_imports import *
-from api.subtitles import _check_subtitle_mismatch
+from ._mixin_imports import *
+from ..api.subtitles import _check_subtitle_mismatch
 
 
 def _hidden_process_kwargs():
@@ -172,7 +172,7 @@ class BrainVideoMixin:
         # ═══ 第四步：规则快速过滤（纯音乐/游戏集锦等确定无人声的跳过ASR） ═══
         ASREngine = None
         try:
-            from xingye_bot.asr_engine import ASREngine
+            from ..xingye_bot.asr_engine import ASREngine
         except ImportError:
             pass
         if ASREngine is not None:
@@ -210,7 +210,7 @@ class BrainVideoMixin:
         asr_text = ""
         
         try:
-            from xingye_bot.asr_engine import get_asr_engine, ASREngine
+            from ..xingye_bot.asr_engine import get_asr_engine, ASREngine
             asr_cfg = config.get("asr", {})
             asr = get_asr_engine(asr_cfg)
 
@@ -404,7 +404,7 @@ class BrainVideoMixin:
             frame_note_mode = (config.get("video", {}) or {}).get("frame_note_mode", "visual_note")
             if frame_note_mode == "visual_note":
                 try:
-                    from xingye_bot.grid_frames import (
+                    from ..xingye_bot.grid_frames import (
                         extract_visual_note_grids, grid_images_to_base64,
                         replace_markers_with_screenshots, visual_note_prompt_suffix,
                     )
@@ -597,7 +597,7 @@ class BrainVideoMixin:
             return None
 
         try:
-            from xingye_bot.grid_frames import (
+            from ..xingye_bot.grid_frames import (
                 extract_visual_note_grids, grid_images_to_base64,
                 replace_markers_with_screenshots, visual_note_prompt_suffix,
             )

@@ -1,8 +1,8 @@
 """brain/_brain_session.py — AgentBrain 会话管理 mixin (能量/评论/私信/弹幕/UP关注/登录)"""
-from brain._mixin_imports import *
-from api.throttle import _bili_throttle
-from core.platform_actions import public_commenting_enabled
-from core.time_policy import is_quiet_period
+from ._mixin_imports import *
+from ..api.throttle import _bili_throttle
+from ..core.platform_actions import public_commenting_enabled
+from ..core.time_policy import is_quiet_period
 
 class BrainSessionMixin:
     """能量恢复、评论检查、私信处理、弹幕互动、UP关注、登录初始化"""
@@ -87,7 +87,7 @@ class BrainSessionMixin:
         state also keeps replies deduplicated across normal and monitor modes.
         """
         try:
-            from brain.monitor import MonitorBot, load_monitor_config
+            from .monitor import MonitorBot, load_monitor_config
             monitor_cfg = load_monitor_config()
         except Exception as exc:
             log(f"[Ntf] 读取 @我监听配置失败: {exc}", "DEBUG")
@@ -454,7 +454,7 @@ class BrainSessionMixin:
         adjusted_prob = UP_FOLLOW_AUTO_PROB * score_factor * impression_bonus
         if not exceptional and random.random() >= adjusted_prob:
             return False
-        from services.like_review import ActionReviewInbox, requires_review
+        from ..services.like_review import ActionReviewInbox, requires_review
         if requires_review(config, "follow_up"):
             ActionReviewInbox(DATA_DIR).propose(
                 "follow_up",
@@ -672,7 +672,7 @@ class BrainSessionMixin:
             dm_text = resp.choices[0].message.content.strip()
             if not dm_text or len(dm_text) > 50:
                 return False
-            from services.like_review import ActionReviewInbox, requires_review
+            from ..services.like_review import ActionReviewInbox, requires_review
             if requires_review(config, "send_danmaku"):
                 ActionReviewInbox(DATA_DIR).propose(
                     "send_danmaku",

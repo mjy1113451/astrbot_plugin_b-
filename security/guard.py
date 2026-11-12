@@ -7,7 +7,7 @@
   例："国家"、"政府"、"民主"、"战争"等
 """
 import re
-from core.config import config as _global_config
+from ..core.config import config as _global_config
 
 
 class ReplySafetyGuard:
@@ -72,7 +72,7 @@ class ReplySafetyGuard:
     def recheck(self):
         """热重载配置（原 start_cli.py 中支持）"""
         if self._config_override is None:
-            from core.config import load_config
+            from ..core.config import load_config
             self._apply_config(load_config())
         else:
             self._apply_config(self._config_override)

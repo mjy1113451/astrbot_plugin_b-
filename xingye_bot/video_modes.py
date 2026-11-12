@@ -16,7 +16,7 @@ import httpx
 
 from .llm import ModelClient
 from .settings import BotSettings, DATA_DIR
-from utils.subtitles import subtitle_priority
+from ..utils.subtitles import subtitle_priority
 
 from .grid_frames import (
     extract_visual_note_grids,
@@ -27,7 +27,7 @@ from .grid_frames import (
 
 # imageio-ffmpeg 回退检测
 try:
-    from utils.helpers import find_ffmpeg, find_ffprobe
+    from ..utils.helpers import find_ffmpeg, find_ffprobe
 except ImportError:
     find_ffmpeg = None
     find_ffprobe = None

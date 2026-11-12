@@ -14,10 +14,10 @@ from bilibili_api import Credential, user, homepage, comment, video, Danmaku
 from bilibili_api.comment import CommentResourceType
 from bilibili_api.video import Video
 
-from core.config import COOKIE_FILE
-from utils.display import log
-from utils.helpers import _mask_urls
-from api.throttle import _bili_throttle, _bili_trigger_cooldown
+from ..core.config import COOKIE_FILE
+from ..utils.display import log
+from ..utils.helpers import _mask_urls
+from .throttle import _bili_throttle, _bili_trigger_cooldown
 
 class BiliClient:
     def __init__(self):

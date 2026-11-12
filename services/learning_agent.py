@@ -25,8 +25,8 @@ from datetime import datetime
 from colorama import Fore, Style
 
 BASE_DIR = Path(__file__).resolve().parent.parent
-from core.user_data import DATA_DIR, HTML_EXPORTS_DIR
-from core.config import config as _core_config, resolve_knowledge_base_dir
+from ..core.user_data import DATA_DIR, HTML_EXPORTS_DIR
+from ..core.config import config as _core_config, resolve_knowledge_base_dir
 
 KNOWLEDGE_BASE_DIR = Path(resolve_knowledge_base_dir(_core_config))
 
@@ -34,7 +34,7 @@ SESSION_DIR = DATA_DIR / "learning_sessions"
 REPORT_EXPORT_DIR = HTML_EXPORTS_DIR
 
 
-from services._services_ai import call_ai, call_ai_with_tools, _live_config
+from ._services_ai import call_ai, call_ai_with_tools, _live_config
 
 # ── B站搜索排序映射 ──
 BILI_SORT_OPTIONS = {
@@ -245,7 +245,7 @@ async def _search_bilibili_agent(query: str, count: int = 8, sort_by: str = "def
 async def _web_search_agent(query: str, count: int = 5) -> list[dict]:
     """Agent工具：联网搜索"""
     try:
-        from knowledge.web_search import web_search
+        from ..knowledge.web_search import web_search
         results = web_search(query, limit=count)
         if inspect.isawaitable(results):
             results = await results
@@ -281,7 +281,7 @@ async def _web_search_agent(query: str, count: int = 5) -> list[dict]:
 async def _get_video_content_agent(bvid: str) -> dict:
     """Agent工具：获取视频字幕"""
     try:
-        from api.subtitles import fetch_bilibili_subtitles
+        from ..api.subtitles import fetch_bilibili_subtitles
         cookies = _load_bili_cookies()
         result = await fetch_bilibili_subtitles(bvid, cookies_obj=cookies if cookies else None)
         if result and result.get("subtitle_text"):
@@ -312,7 +312,7 @@ def _list_kb_files_agent() -> list[dict]:
 
 def _read_kb_file_agent(filename: str, max_chars: int = 15000) -> dict:
     """Agent工具：读取知识库文件"""
-    from services.knowledge_tutor import safe_resolve
+    from .knowledge_tutor import safe_resolve
     path = safe_resolve(filename)
     if path is None:
         return {"error": f"非法路径: {filename}"}
@@ -687,7 +687,7 @@ async def run_multi_agent_deep_dive(
     Returns:
         {"success": True/False, "results": [...], "combined_report": str}
     """
-    from services.deep_dive import run_deep_dive
+    from .deep_dive import run_deep_dive
 
     results = []
 
@@ -860,7 +860,7 @@ async def learning_agent_menu_cli(agent_type: str = "deep_dive"):
                     count_str = input(f"{Fore.CYAN}题目数量 (默认5): {Style.RESET_ALL}").strip() or "5"
                     full_input = f"请从B站视频 BV{bvid} 的字幕内容中，生成 {count_str} 道{diff}难度的考题。"
                 elif src_choice == "2":
-                    from services.quiz_generator import scan_kb_files
+                    from .quiz_generator import scan_kb_files
                     files = scan_kb_files()
                     if not files:
                         print(f"{Fore.YELLOW}[INFO] 知识库为空{Style.RESET_ALL}")
@@ -1050,14 +1050,14 @@ async def deep_dive_with_mode():
     if choice == "0":
         return
     elif choice == "1":
-        from services.deep_dive import deep_dive_menu_cli
+        from .deep_dive import deep_dive_menu_cli
         await deep_dive_menu_cli()
     elif choice == "2":
         await learning_agent_menu_cli("deep_dive")
     elif choice == "3":
         await _multi_agent_menu_cli()
     elif choice == "4":
-        from services.deep_dive import deep_research_menu_cli
+        from .deep_dive import deep_research_menu_cli
         await deep_research_menu_cli()
     else:
         print(f"{Fore.YELLOW}[INFO] 无效选项{Style.RESET_ALL}")
@@ -1077,7 +1077,7 @@ async def quiz_with_mode():
     if choice == "0":
         return
     elif choice == "1":
-        from services.quiz_generator import quiz_menu_cli
+        from .quiz_generator import quiz_menu_cli
         await quiz_menu_cli()
     elif choice == "2":
         await learning_agent_menu_cli("quiz")

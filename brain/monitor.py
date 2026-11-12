@@ -15,16 +15,16 @@ from pathlib import Path
 
 from colorama import Fore, Style
 
-from core.config import config, DATA_DIR, COOKIE_FILE, COMMENT_LOG_FILE, PRIVATE_MESSAGE_LOG_FILE
-from api.client import BiliClient
-from api.auth import is_bili_logged_in
-from api.throttle import _bili_throttle, _bili_trigger_cooldown
+from ..core.config import config, DATA_DIR, COOKIE_FILE, COMMENT_LOG_FILE, PRIVATE_MESSAGE_LOG_FILE
+from ..api.client import BiliClient
+from ..api.auth import is_bili_logged_in
+from ..api.throttle import _bili_throttle, _bili_trigger_cooldown
 from bilibili_api import session as bili_session
 from bilibili_api import video as bili_video
-from brain.comment import CommentInteractionManager, _reply_comment_like_probability
-from brain.private_msg import PrivateMessageManager
-from utils.display import log
-from utils.lock import _acquire_bot_lock, _release_bot_lock
+from .comment import CommentInteractionManager, _reply_comment_like_probability
+from .private_msg import PrivateMessageManager
+from ..utils.display import log
+from ..utils.lock import _acquire_bot_lock, _release_bot_lock
 
 # 监听配置
 MONITOR_CONFIG_FILE = os.path.join(DATA_DIR, "monitor_config.json")
@@ -418,8 +418,8 @@ class MonitorBot:
         except Exception as exc:
             evidence = {"status": "unavailable", "error": str(exc)[:180]}
 
-        from services._services_ai import call_ai
-        from utils.helpers import ensure_ai_marker
+        from ..services._services_ai import call_ai
+        from ..utils.helpers import ensure_ai_marker
         prompt = (
             "Reply to this Bilibili @ mention naturally and briefly. Use only the supplied evidence. "
             "Do not say the video was watched or completed; subtitles are evidence of text read, not playback. "

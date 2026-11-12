@@ -1,6 +1,6 @@
 """brain/_brain_runtime.py — AgentBrain 运行时 & 记忆持久化 mixin"""
-from brain._mixin_imports import *
-from utils.helpers import _load_json_file, _save_json_file
+from ._mixin_imports import *
+from ..utils.helpers import _load_json_file, _save_json_file
 
 class BrainRuntimeMixin:
     """Runtime clock, memory load/save"""

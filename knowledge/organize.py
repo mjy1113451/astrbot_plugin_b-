@@ -2,12 +2,12 @@
 import asyncio, os, json, re, random, shutil
 from datetime import datetime
 from colorama import Fore, Style
-from core.config import config
-from core.globals import *
-from utils.display import log
-from utils.helpers import sanitize_filename
-from brain.video_analysis import _scan_knowledge_base_md_files
-from knowledge.classifier import KnowledgeBaseClassifier
+from ..core.config import config
+from ..core.globals import *
+from ..utils.display import log
+from ..utils.helpers import sanitize_filename
+from ..brain.video_analysis import _scan_knowledge_base_md_files
+from .classifier import KnowledgeBaseClassifier
 
 async def organize_knowledge_base():
     """扫描并整理知识库：将非3层目录结构的文件AI自动归位。

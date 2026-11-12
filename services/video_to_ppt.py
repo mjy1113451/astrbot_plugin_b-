@@ -1127,7 +1127,7 @@ def _load_claude_design_system() -> str:
         pass
 
     if not prompt_text:
-        from services.html_renderer import SLIDE_COMPONENT_CONTRACT
+        from .html_renderer import SLIDE_COMPONENT_CONTRACT
         prompt_text = SLIDE_COMPONENT_CONTRACT
 
     # 加载参考HTML示例的关键结构信息
@@ -1637,6 +1637,11 @@ def build_full_html(
 })();
 """
 
+    icons = (
+        '<script src="https://unpkg.com/lucide@latest/dist/umd/lucide.js"></script>'
+        if is_claude or is_claude_slides or is_claude_slides_v2
+        else '<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">'
+    )
     full_html = f"""<!DOCTYPE html>
 <html lang="zh-CN">
 <head>
@@ -1644,7 +1649,7 @@ def build_full_html(
 <meta name="viewport" content="width=device-width,initial-scale=1.0">
 <title>{theme['name']} Theme - B站视频知识卡片</title>
 {google_fonts}
-{"<script src=\"https://unpkg.com/lucide@latest/dist/umd/lucide.js\"></script>" if is_claude or is_claude_slides or is_claude_slides_v2 else "<link rel=\"stylesheet\" href=\"https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css\">"}
+{icons}
 <style>
 {css_vars}
 {use_css}
@@ -1753,7 +1758,7 @@ def save_html_to_path(html_content: str, save_path: str = None) -> str:
         实际保存的完整文件路径
     """
     if save_path is None:
-        from core.user_data import HTML_EXPORTS_DIR
+        from ..core.user_data import HTML_EXPORTS_DIR
         default_dir = HTML_EXPORTS_DIR
         default_dir.mkdir(parents=True, exist_ok=True)
         save_path = str(default_dir)
@@ -1805,7 +1810,7 @@ async def generate_ppt_from_bvid(
         "error": str or None
     }
     """
-    from api.subtitles import fetch_bilibili_subtitles
+    from ..api.subtitles import fetch_bilibili_subtitles
 
     requested_theme = normalize_theme_name(theme)
     # "auto" must select a maintained high-quality engine, not fall through to
@@ -2045,7 +2050,7 @@ async def generate_ppt_from_bvid(
 
     if auto_save:
         if output_dir is None:
-            from core.user_data import HTML_EXPORTS_DIR
+            from ..core.user_data import HTML_EXPORTS_DIR
             output_dir = str(HTML_EXPORTS_DIR)
         os.makedirs(output_dir, exist_ok=True)
 
@@ -2074,7 +2079,7 @@ if __name__ == "__main__":
     theme = sys.argv[2] if len(sys.argv) > 2 else "dark"
 
     # 从config读取API配置
-    from core.config import CONFIG_FILE, COOKIE_FILE
+    from ..core.config import CONFIG_FILE, COOKIE_FILE
     config_path = CONFIG_FILE
     api_key = ""
     base_url = ""

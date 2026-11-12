@@ -7,15 +7,15 @@ import httpx
 from datetime import datetime
 from html.parser import HTMLParser
 
-from core.config import config, KNOWLEDGE_BASE_DIR
-from utils.display import log
-from utils.helpers import _mask_urls
-from api.subtitles import SYSTEM_PROMPT_KNOWLEDGE_VERIFY
-from brain.decision import decode_ai_mapping
+from ..core.config import config, KNOWLEDGE_BASE_DIR
+from ..utils.display import log
+from ..utils.helpers import _mask_urls
+from ..api.subtitles import SYSTEM_PROMPT_KNOWLEDGE_VERIFY
+from ..brain.decision import decode_ai_mapping
 
 # ── 统一 AI 调用（不再依赖 openai） ──
 async def _ai_chat(messages, timeout=120, temperature=0.7):
-    from services._services_ai import call_ai
+    from ..services._services_ai import call_ai
     return await call_ai(messages=messages, timeout=timeout,
                          temperature=temperature, verbose=False)
 

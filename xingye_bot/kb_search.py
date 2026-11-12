@@ -18,7 +18,7 @@ import re
 from pathlib import Path
 from typing import Any
 
-from core.config import config, resolve_knowledge_base_dir
+from ..core.config import config, resolve_knowledge_base_dir
 
 from .llm import ModelClient
 from .settings import DATA_DIR, BotSettings

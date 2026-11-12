@@ -186,7 +186,7 @@ class BilibiliAccount:
         action = (action or "").strip().lower()
         payload = {"bvid": bvid, "action": action, "text": text}
         # Commenting and video likes are intentionally source-disabled globally.
-        from core.platform_actions import public_commenting_enabled, video_liking_enabled
+        from ..core.platform_actions import public_commenting_enabled, video_liking_enabled
         if action == "comment" and not public_commenting_enabled():
             return {"executed": False, "reason": "评论功能已被全局安全策略禁用", "payload": payload}
         if action == "like" and not video_liking_enabled():
@@ -197,7 +197,7 @@ class BilibiliAccount:
 
         review_type = {"like": "video_like", "coin": "coin", "favorite": "favorite"}.get(action)
         if review_type:
-            from services.like_review import ActionReviewInbox, requires_review
+            from ..services.like_review import ActionReviewInbox, requires_review
             try:
                 review_config = json.loads((DATA_DIR / "config.json").read_text(encoding="utf-8"))
             except Exception:
@@ -280,7 +280,7 @@ class BilibiliAccount:
     async def send_comment_reply(self, oid: int, root: int, parent: int, text: str, dry_run: bool = True, allow_comment: bool = False) -> dict[str, Any]:
         text = _with_ai_marker(text)
         payload = {"oid": oid, "root": root, "parent": parent, "text": text}
-        from core.platform_actions import public_commenting_enabled
+        from ..core.platform_actions import public_commenting_enabled
         if not public_commenting_enabled():
             return {"executed": False, "reason": "评论功能已被全局安全策略禁用", "payload": payload}
         if dry_run or not allow_comment:

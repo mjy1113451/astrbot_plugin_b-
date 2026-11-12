@@ -11,6 +11,7 @@ from unittest.mock import patch
 
 
 ROOT = Path(__file__).resolve().parents[1]
+PACKAGE = "_live_brain_config_test_plugin"
 MIXINS = {
     "_brain_interact.py": 3,
     "_brain_curiosity.py": 1,
@@ -26,6 +27,7 @@ def tree(name):
 
 
 def extract_function(name, function, namespace):
+    namespace = {"__package__": f"{PACKAGE}.brain", **namespace}
     node = next(n for n in ast.walk(tree(name))
                 if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef)) and n.name == function)
     module = ast.fix_missing_locations(ast.Module(body=[node], type_ignores=[]))
@@ -48,11 +50,18 @@ def eval_expr(node, namespace):
 class LiveConfigurationTests(unittest.TestCase):
     def setUp(self):
         self.cfg = {"api": {"model_brain": "brain-before", "model_vision": "vision-before"}}
-        core = ModuleType("core")
-        core.__path__ = []
-        config_module = ModuleType("core.config")
+        package = ModuleType(PACKAGE)
+        package.__path__ = [str(ROOT)]
+        package.__package__ = PACKAGE
+        core = ModuleType(f"{PACKAGE}.core")
+        core.__path__ = [str(ROOT / "core")]
+        config_module = ModuleType(f"{PACKAGE}.core.config")
         config_module.config = self.cfg
-        self.modules = patch.dict(sys.modules, {"core": core, "core.config": config_module})
+        package.core = core
+        core.config = config_module
+        self.modules = patch.dict(sys.modules, {PACKAGE: package,
+                                                core.__name__: core,
+                                                config_module.__name__: config_module})
         self.modules.start()
         self.addCleanup(self.modules.stop)
         live_config = extract_function("_brain_ai.py", "_live_config", {"os": os})

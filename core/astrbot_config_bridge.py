@@ -57,7 +57,7 @@ def apply_astrbot_config(values):
     if not isinstance(enabled, bool):
         raise TypeError("use_astrbot_config must be a boolean")
     if not enabled:
-        shared = sys.modules.get("core.config")
+        shared = sys.modules.get(f"{__package__}.config")
         if shared is not None and Path(shared.CONFIG_FILE).exists():
             _sync_loaded_config(shared, shared.load_config())
         return
@@ -72,13 +72,13 @@ def apply_astrbot_config(values):
     if any(name not in schema for name in sections):
         raise ValueError("apply_sections contains an unknown configuration group")
     if not sections:
-        shared = sys.modules.get("core.config")
+        shared = sys.modules.get(f"{__package__}.config")
         if shared is not None and Path(shared.CONFIG_FILE).exists():
             _sync_loaded_config(shared, shared.load_config())
         return
     patch = _filtered_patch(values, {name: schema[name] for name in sections})
 
-    import core.config as shared
+    from . import config as shared
 
     path = Path(shared.CONFIG_FILE)
     if path.exists():
@@ -102,7 +102,7 @@ def apply_astrbot_config(values):
 def _sync_loaded_config(shared, updated):
     shared.config.clear()
     shared.config.update(updated)
-    app = sys.modules.get("cli.app")
+    app = sys.modules.get(f"{__package__.rsplit('.', 1)[0]}.cli.app")
     if app is not None and isinstance(getattr(app, "config", None), dict):
         app.config.clear()
         app.config.update(deepcopy(updated))

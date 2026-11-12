@@ -86,7 +86,7 @@ def ensure_ppt_container(fragment: str, *, title: str = "学习页面") -> str:
 
 def render_slide_html(fragment: str, *, title: str = "学习页面", enhanced_animations: bool = True) -> str:
     """Render a Claude slide deck from an AI-generated fragment."""
-    from services.video_to_ppt import build_full_html
+    from .video_to_ppt import build_full_html
 
     normalized = ensure_ppt_container(fragment, title=title)
     return build_full_html(normalized, "claude_slides", enhanced_animations=enhanced_animations)
@@ -122,7 +122,8 @@ def markdown_to_reading_html(markdown: str, title: str) -> str:
             if not in_list:
                 blocks.append("<ul>")
                 in_list = True
-            blocks.append(f"<li>{html.escape(re.sub(r'^[-*]\s+', '', line).strip())}</li>")
+            item = re.sub(r'^[-*]\s+', '', line).strip()
+            blocks.append(f"<li>{html.escape(item)}</li>")
         else:
             close_list()
             blocks.append(f"<p>{html.escape(line)}</p>")

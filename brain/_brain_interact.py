@@ -7,8 +7,8 @@ import re
 import json
 import asyncio
 
-from brain._mixin_imports import *
-from utils.helpers import _mask_urls
+from ._mixin_imports import *
+from ..utils.helpers import _mask_urls
 
 
 class BrainInteractMixin:
@@ -69,7 +69,7 @@ class BrainInteractMixin:
         v2.0: 使用智能兴趣引擎 (interest_engine.py)
         管道: 排除词 → 灵光一闪 → 关键词+同义词 → 多维度评分 → AI兜底
         """
-        from services.interest_engine import get_engine, MatchResult
+        from ..services.interest_engine import get_engine, MatchResult
 
         engine = get_engine()
 
