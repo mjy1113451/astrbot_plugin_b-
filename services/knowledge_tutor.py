@@ -22,7 +22,7 @@ from datetime import datetime
 
 # 延迟导入，避免循环依赖
 BASE_DIR = Path(__file__).resolve().parent.parent
-from core.config import config, resolve_knowledge_base_dir
+from ..core.config import config, resolve_knowledge_base_dir
 
 
 
@@ -61,7 +61,7 @@ class _AIChatAdapter:
     """统一 AI 调用适配器：暴露 `.chat(messages, purpose=...)` 接口，
     内部复用 services._services_ai.call_ai()，不再依赖 xingye_bot。"""
     async def chat(self, messages, purpose=""):
-        from services._services_ai import call_ai
+        from ._services_ai import call_ai
         return await call_ai(messages=messages, temperature=0.7, verbose=False)
 
 
@@ -451,7 +451,7 @@ class KnowledgeTutor:
                 html = html[:-3]
             html = html.strip()
 
-            from services.html_renderer import render_slide_html
+            from .html_renderer import render_slide_html
             return render_slide_html(html, title=main_title, enhanced_animations=True)
         except Exception as e:
             return f"<html><body><h1>❌ 生成失败: {e}</h1></body></html>"

@@ -6,9 +6,9 @@ import os
 import re
 from datetime import datetime
 
-from brain._mixin_imports import *
-from api.subtitles import SYSTEM_PROMPT_COMMENT_SUMMARY
-from brain.local_note import build_local_subtitle_note
+from ._mixin_imports import *
+from ..api.subtitles import SYSTEM_PROMPT_COMMENT_SUMMARY
+from .local_note import build_local_subtitle_note
 
 
 class BrainLearnMixin:
@@ -155,7 +155,7 @@ class BrainLearnMixin:
                 # 📄 Word 文档自动导出（独立 Word/ 文件夹，受 document_export.enabled 控制）
                 if DOC_EXPORT_ENABLED:
                     try:
-                        from services.document_export import export_docx
+                        from ..services.document_export import export_docx
                         docx_path = export_docx(file_path, kb_root=KNOWLEDGE_BASE_DIR)
                         log(f"Word 文档已导出: {docx_path}", "SUCCESS")
                     except Exception as de_e:

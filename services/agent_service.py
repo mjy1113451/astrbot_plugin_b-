@@ -2,7 +2,7 @@
 import asyncio, json, os, random, re, time
 from datetime import datetime
 from colorama import Fore, Style
-from core.config import (
+from ..core.config import (
     config as _global_config, MODEL_BRAIN, AGENT_SKILL_LOG_FILE,
     AGENT_DIVE_MAX_VIDEOS, AGENT_MAX_SEARCH_RESULTS, AGENT_MAX_STEPS_PER_PLAN,
     AGENT_MAX_VIDEOS_PER_PLAN, log
@@ -189,7 +189,7 @@ class AgentSkillRunner:
         # Reuse the same non-interactive pipeline used by the web panel.  A
         # watched item now means subtitles/ASR, comments, danmaku, scoring and
         # the knowledge-base decision actually ran; it is no longer a label.
-        from brain.video_analysis import analyze_bilibili_video_input
+        from ..brain.video_analysis import analyze_bilibili_video_input
 
         watched = []
         results = self._search_results if hasattr(self, '_search_results') else []

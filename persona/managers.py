@@ -5,7 +5,7 @@
 import os, json, random, re, time, threading
 from datetime import datetime, timedelta
 from colorama import Fore, Style
-from core.config import (
+from ..core.config import (
     PERSONAS_FILE, MOOD_STATE_FILE, USER_PROFILES_FILE,
     BOT_DIARY_FILE, SELF_EVOLUTION_FILE, PRIVATE_CONTEXT_FILE,
     AGENT_SKILL_LOG_FILE, load_json_file, save_json_file, config as _global_config
@@ -774,7 +774,7 @@ class BotDiaryManager:
                 f"事件：\n{event_text}"
             )
             try:
-                from services._services_ai import call_ai
+                from ..services._services_ai import call_ai
                 ai_content = await call_ai(
                     [{"role": "user", "content": prompt}], model=model,
                     temperature=0.4, max_tokens=700, timeout=90, verbose=False,
@@ -880,7 +880,7 @@ class SelfEvolutionManager:
         )
         
         try:
-            from services._services_ai import call_ai
+            from ..services._services_ai import call_ai
             raw = await call_ai(
                 messages=[
                     {"role": "system", "content": "你是角色成长记录员，只提出温和、可控的性格演化建议。只输出JSON。"},
@@ -913,7 +913,7 @@ class SelfEvolutionManager:
             self._save()
             return item
         except Exception as e:
-            from utils.display import log
+            from ..utils.display import log
             log(f"[EVOLVE] 自我进化反思失败: {e}", "WARN")
             return {"id": len(self.data.get("items", [])), "parsed": {
                 "reflection": f"反思失败: {e}", "style_delta": "", "relationship_delta": "", "new_rule": "", "mood_delta": 0

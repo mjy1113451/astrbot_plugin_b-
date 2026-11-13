@@ -28,7 +28,7 @@ import asyncio
 from datetime import datetime, timedelta
 from collections import defaultdict, Counter
 from math import log2
-from core.user_data import DATA_DIR as _SHARED_DATA_DIR
+from ..core.user_data import DATA_DIR as _SHARED_DATA_DIR
 
 # ── 文件路径 ─────────────────────────────────────────────────
 DATA_DIR = str(_SHARED_DATA_DIR)

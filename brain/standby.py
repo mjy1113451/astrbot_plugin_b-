@@ -7,12 +7,11 @@ v2: 支持在任何视频下被@自动总结（通过 B站 @我通知 API + 评�
 import asyncio, json, os, sys, re, time, hashlib, traceback
 
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-sys.path.insert(0, BASE_DIR)
 
 import httpx
-from core.config import config as _core_config, resolve_knowledge_base_dir
-from core.user_data import DATA_DIR as _USER_DATA_DIR
-from core.platform_actions import public_commenting_enabled
+from ..core.config import config as _core_config, resolve_knowledge_base_dir
+from ..core.user_data import DATA_DIR as _USER_DATA_DIR
+from ..core.platform_actions import public_commenting_enabled
 from colorama import Fore, Style, init as colorama_init
 colorama_init(autoreset=True)
 
@@ -286,7 +285,7 @@ class StandbyBot:
             # 代理支持
             _proxy_url = ""
             try:
-                from services.proxy_config import get_proxy_url
+                from ..services.proxy_config import get_proxy_url
                 _proxy_url = get_proxy_url()
             except Exception:
                 pass

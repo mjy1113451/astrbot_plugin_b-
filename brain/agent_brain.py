@@ -16,19 +16,19 @@
   _brain_loop.py      — 主循环 run()
 """
 
-from brain._brain_init import BrainInitMixin
-from brain._brain_ai import BrainAIMixin
-from brain._brain_runtime import BrainRuntimeMixin
-from brain._brain_ups import BrainUpsMixin
-from brain._brain_history import BrainHistoryMixin
-from brain._brain_journal import BrainJournalMixin
-from brain._brain_auto import BrainAutoMixin
-from brain._brain_session import BrainSessionMixin
-from brain._brain_learn import BrainLearnMixin
-from brain._brain_curiosity import BrainCuriosityMixin
-from brain._brain_video import BrainVideoMixin
-from brain._brain_interact import BrainInteractMixin
-from brain._brain_loop import BrainLoopMixin
+from ._brain_init import BrainInitMixin
+from ._brain_ai import BrainAIMixin
+from ._brain_runtime import BrainRuntimeMixin
+from ._brain_ups import BrainUpsMixin
+from ._brain_history import BrainHistoryMixin
+from ._brain_journal import BrainJournalMixin
+from ._brain_auto import BrainAutoMixin
+from ._brain_session import BrainSessionMixin
+from ._brain_learn import BrainLearnMixin
+from ._brain_curiosity import BrainCuriosityMixin
+from ._brain_video import BrainVideoMixin
+from ._brain_interact import BrainInteractMixin
+from ._brain_loop import BrainLoopMixin
 
 
 class AgentBrain(

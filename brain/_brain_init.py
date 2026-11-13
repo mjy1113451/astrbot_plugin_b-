@@ -1,5 +1,5 @@
 """brain/_brain_init.py — AgentBrain 初始化 & 预取 mixin"""
-from brain._mixin_imports import *
+from ._mixin_imports import *
 
 class BrainInitMixin:
     """AgentBrain __init__ & prefetch"""
@@ -119,8 +119,8 @@ class BrainInitMixin:
     async def _init_ob_bridge(self):
         """初始化 OpenBiliClaw 桥梁（在 run() 开始时调用）"""
         try:
-            from ob_bridge.client import OBClient
-            from ob_bridge.health import ensure_ob_ready, auto_detect_mode
+            from ..ob_bridge.client import OBClient
+            from ..ob_bridge.health import ensure_ob_ready, auto_detect_mode
 
             ob_cfg = config.get("ob", {})
             if not ob_cfg.get("enabled", False):
@@ -164,7 +164,7 @@ class BrainInitMixin:
             # ── Phase 4: 初始化审计 & AB 对比跟踪器 ──
             if ob_cfg.get("audit_enabled", True):
                 try:
-                    from ob_bridge.audit import OBAuditor
+                    from ..ob_bridge.audit import OBAuditor
                     self._ob_auditor = OBAuditor()
                     log("[OB] 📊 效能审计器已初始化", "CONFIG")
                 except ImportError:
@@ -172,7 +172,7 @@ class BrainInitMixin:
 
             if ob_cfg.get("ab_test_enabled", True):
                 try:
-                    from ob_bridge.ab_test import ABComparisonTracker
+                    from ..ob_bridge.ab_test import ABComparisonTracker
                     self._ob_ab_tracker = ABComparisonTracker(
                         window_size=ob_cfg.get("ab_window_size", 200))
                     log("[OB] ⚖️ AB对比跟踪器已初始化", "CONFIG")
@@ -383,7 +383,7 @@ class BrainInitMixin:
             return
 
         try:
-            from ob_bridge.config_bridge import sync_knowledge_gaps_to_ob
+            from ..ob_bridge.config_bridge import sync_knowledge_gaps_to_ob
 
             # 从知识库分类器获取各领域覆盖情况
             gaps = []
@@ -418,7 +418,7 @@ class BrainInitMixin:
             return
 
         try:
-            from ob_bridge.config_bridge import inject_curiosity_from_diary
+            from ..ob_bridge.config_bridge import inject_curiosity_from_diary
 
             ttl = ob_cfg.get("curiosity_keyword_ttl_hours", 24)
             injected = await inject_curiosity_from_diary(diary_entry, self.ob_client, ttl)
@@ -435,7 +435,7 @@ class BrainInitMixin:
             return
 
         try:
-            from ob_bridge.config_bridge import extract_strategy_lines, parse_and_apply_strategy
+            from ..ob_bridge.config_bridge import extract_strategy_lines, parse_and_apply_strategy
 
             strategy_text = extract_strategy_lines(evolution_result)
             if strategy_text:
@@ -454,7 +454,7 @@ class BrainInitMixin:
             return
 
         try:
-            from ob_bridge.config_bridge import apply_evolution_to_ob
+            from ..ob_bridge.config_bridge import apply_evolution_to_ob
 
             result = await apply_evolution_to_ob(
                 evolution_result, self.ob_client, ab_context

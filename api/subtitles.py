@@ -11,13 +11,13 @@ from pathlib import Path
 import httpx
 from bilibili_api.video import Video
 
-from core.config import config
-from core.globals import SUBTITLE_STRICT_CHECK
-from core.user_data import DATA_DIR
-from utils.display import log
-from utils.helpers import _mask_urls
-from utils.subtitles import subtitle_priority
-from api.throttle import _bili_throttle
+from ..core.config import config
+from ..core.globals import SUBTITLE_STRICT_CHECK
+from ..core.user_data import DATA_DIR
+from ..utils.display import log
+from ..utils.helpers import _mask_urls
+from ..utils.subtitles import subtitle_priority
+from .throttle import _bili_throttle
 
 
 _timeline_cache_lock = threading.Lock()

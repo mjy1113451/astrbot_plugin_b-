@@ -9,7 +9,7 @@ from typing import Any
 
 
 ROOT_DIR = Path(__file__).resolve().parents[1]
-from core.user_data import DATA_DIR
+from ..core.user_data import DATA_DIR
 
 CONFIG_FILE = DATA_DIR / "config.json"
 
@@ -178,7 +178,7 @@ def load_settings() -> BotSettings:
     不再独立读取 config.json，而是使用 core.config 已加载的配置，
     确保所有模块共享同一份配置。
     """
-    import core.config as _root_cfg
+    from ..core import config as _root_cfg
     raw = _root_cfg.config
     DATA_DIR.mkdir(exist_ok=True)
     api = _dict(raw.get("api"))

@@ -18,8 +18,8 @@ except Exception:  # 非 CLI 场景（如网页端导入）降级为无色
 
 
 BASE_DIR = Path(__file__).resolve().parent.parent
-from core.config import CONFIG_FILE
-from core.user_data import WORD_DIR
+from ..core.config import CONFIG_FILE
+from ..core.user_data import WORD_DIR
 
 
 
@@ -71,7 +71,7 @@ def _md_to_plain_lines(text: str) -> list[str]:
 
 
 def _read_md(md_path: str | Path, kb_root: str | Path | None = None) -> Path:
-    from core.config import config, resolve_knowledge_base_dir
+    from ..core.config import config, resolve_knowledge_base_dir
     root = Path(kb_root or resolve_knowledge_base_dir(config)).resolve()
 
     target = Path(md_path)
@@ -278,8 +278,8 @@ async def export_video_content(title: str, up_name: str, video_url: str, ctx: st
     # PPT（复用既有 generate_ppt_from_bvid）
     if 'ppt' in fmt_set:
         try:
-            from services._services_ai import _live_config
-            from services.video_to_ppt import generate_ppt_from_bvid
+            from ._services_ai import _live_config
+            from .video_to_ppt import generate_ppt_from_bvid
             live = _live_config()
             ppt = await generate_ppt_from_bvid(
                 bvid=bvid, api_key=live.get('api_key', ''), base_url=live.get('base_url', ''),
@@ -295,7 +295,7 @@ async def export_video_content(title: str, up_name: str, video_url: str, ctx: st
     if 'mindmap' in fmt_set:
         try:
             import tempfile
-            from services.mindmap_export import export_mindmap
+            from .mindmap_export import export_mindmap
             _safe = re.sub(r'[\\/:*?"<>|]', '_', title)[:80]
             with tempfile.NamedTemporaryFile(mode='w', suffix='.md', prefix=f'[{bvid or "video"}] - ',
                                              encoding='utf-8', delete=False) as _tf:

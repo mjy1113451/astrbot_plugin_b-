@@ -1,5 +1,5 @@
 """brain/_brain_journal.py — AgentBrain prompt构建 & 日记 & 事件记录 mixin"""
-from brain._mixin_imports import *
+from ._mixin_imports import *
 
 class BrainJournalMixin:
     """Prompt构建、日记、事件记录、学习日志"""

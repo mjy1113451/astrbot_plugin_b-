@@ -26,8 +26,8 @@ from datetime import datetime
 from colorama import Fore, Style
 
 BASE_DIR = Path(__file__).resolve().parent.parent
-from core.user_data import DATA_DIR, HTML_EXPORTS_DIR
-from core.config import config as _core_config, resolve_knowledge_base_dir
+from ..core.user_data import DATA_DIR, HTML_EXPORTS_DIR
+from ..core.config import config as _core_config, resolve_knowledge_base_dir
 
 KNOWLEDGE_BASE_DIR = Path(resolve_knowledge_base_dir(_core_config))
 
@@ -35,7 +35,7 @@ REPORT_EXPORT_DIR = HTML_EXPORTS_DIR / "deep_dives"
 
 
 
-from services._services_ai import call_ai, _live_config
+from ._services_ai import call_ai, _live_config
 
 
 def _load_bili_cookies() -> dict:
@@ -52,7 +52,7 @@ def _load_bili_cookies() -> dict:
 async def _web_search(query: str, limit: int = 8) -> list[dict[str, str]]:
     """联网搜索（复用项目内 logic）"""
     try:
-        from knowledge.web_search import web_search
+        from ..knowledge.web_search import web_search
         results = web_search(query, limit=limit)
         if inspect.isawaitable(results):
             results = await results
@@ -106,7 +106,7 @@ async def _search_bilibili(query: str, limit: int = 10, sort_by: str = "default"
     """
     try:
         import httpx
-        from core.config import config
+        from ..core.config import config
 
         order_param = _BILI_ORDER_MAP.get(sort_by, "totalrank")
         cookies = _load_bili_cookies()
@@ -142,7 +142,7 @@ async def _search_bilibili(query: str, limit: int = 10, sort_by: str = "default"
 async def _fetch_video_subtitles_simple(bvid: str) -> str:
     """获取视频字幕文本"""
     try:
-        from api.subtitles import fetch_bilibili_subtitles
+        from ..api.subtitles import fetch_bilibili_subtitles
         cookies = _load_bili_cookies()
         result = await fetch_bilibili_subtitles(bvid, cookies_obj=cookies if cookies else None)
         if result and result.get("subtitle_text"):
@@ -158,13 +158,13 @@ def _safe_filename(name: str) -> str:
 
 def _markdown_to_html(markdown: str, title: str) -> str:
     """将深入报告导出为统一的 Claude 风格阅读页。"""
-    from services.html_renderer import markdown_to_reading_html
+    from .html_renderer import markdown_to_reading_html
     return markdown_to_reading_html(markdown, title)
 
 
 def _markdown_to_ppt_html(markdown: str, title: str) -> str:
     """将报告导出为与视频转网页一致的 Claude 幻灯片页面。"""
-    from services.html_renderer import markdown_to_slides_html
+    from .html_renderer import markdown_to_slides_html
     return markdown_to_slides_html(markdown, title, tag="DEEP RESEARCH")
 
 
@@ -190,13 +190,13 @@ def export_deep_dive_file(md_path: str | Path, formats: list[str] | None = None)
         p.write_text(_markdown_to_ppt_html(text, title), encoding='utf-8')
         out['ppt'] = str(p)
     if 'docx' in fmt_set or 'word' in fmt_set:
-        from services.document_export import export_docx_text
+        from .document_export import export_docx_text
         out['docx'] = export_docx_text(text, title, out_dir=export_root / 'Word')
     if 'pdf' in fmt_set:
-        from services.document_export import export_pdf_text
+        from .document_export import export_pdf_text
         out['pdf'] = export_pdf_text(text, title, out_dir=export_root / 'PDF')
     if 'mindmap' in fmt_set or 'mm' in fmt_set:
-        from services.mindmap_export import export_mindmap
+        from .mindmap_export import export_mindmap
         out['mindmap'] = export_mindmap(src, output_dir=export_root / 'MindMaps')
     return out
 

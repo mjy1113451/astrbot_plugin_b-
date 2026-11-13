@@ -8,8 +8,8 @@ from typing import Optional
 
 import httpx
 
-from ob_bridge.types import OBMode, OBStatus, RecommendationItem
-from utils.display import log
+from .types import OBMode, OBStatus, RecommendationItem
+from ..utils.display import log
 
 
 class OBClient:

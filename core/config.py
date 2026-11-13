@@ -8,9 +8,9 @@ import sys
 import json
 import hashlib, base64, secrets
 from colorama import Fore, Style
-from utils.storage import get_backup_dir
-from utils.display import mask_secret
-from core.user_data import (
+from ..utils.storage import get_backup_dir
+from ..utils.display import mask_secret
+from .user_data import (
     DATA_DIR as _USER_DATA_DIR,
     HIGHLIGHTS_DIR as _USER_HIGHLIGHTS_DIR,
     KNOWLEDGE_BASE_DIR as _USER_KNOWLEDGE_BASE_DIR,

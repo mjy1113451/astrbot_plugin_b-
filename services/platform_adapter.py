@@ -36,7 +36,7 @@ except Exception:  # pragma: no cover
 
 # 项目根目录（services 的父目录），供下载骨架使用
 BASE_DIR = Path(__file__).resolve().parent.parent
-from core.user_data import DATA_DIR
+from ..core.user_data import DATA_DIR
 
 SUPPORTED_PLATFORMS = ("bilibili", "youtube", "douyin", "kuaishou", "web", "local")
 

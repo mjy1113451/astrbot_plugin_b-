@@ -13,12 +13,12 @@ from bilibili_api.comment import CommentResourceType
 from bilibili_api import comment
 from colorama import Fore, Style
 
-from brain._mixin_imports import *
-from utils.helpers import _mask_urls
-from utils.helpers import _safe_task_callback
-from api.throttle import _bili_throttle
-from utils.lock import _acquire_bot_lock, _release_bot_lock
-from brain.decision import decode_ai_mapping, parse_video_decision, response_text
+from ._mixin_imports import *
+from ..utils.helpers import _mask_urls
+from ..utils.helpers import _safe_task_callback
+from ..api.throttle import _bili_throttle
+from ..utils.lock import _acquire_bot_lock, _release_bot_lock
+from .decision import decode_ai_mapping, parse_video_decision, response_text
 
 
 async def select_candidate_video(brain, items):
@@ -29,7 +29,7 @@ async def select_candidate_video(brain, items):
     candidate_log_detail_limit = 5
     video_config = config.get("video", {})
     try:
-        from core.config import load_config
+        from ..core.config import load_config
         video_config = load_config().get("video", video_config)
     except Exception:
         pass
@@ -51,7 +51,7 @@ async def select_candidate_video(brain, items):
     # change saved from the web page immediately instead of keeping a stale
     # singleton in memory.
     try:
-        from services.interest_engine import InterestEngine
+        from ..services.interest_engine import InterestEngine
         interest_engine = InterestEngine()
         interests = [str(item).strip() for item in interest_engine.get_keywords() if str(item).strip()]
     except Exception as exc:
@@ -118,7 +118,7 @@ async def select_candidate_video(brain, items):
     selected = random.choice(matched)
     log(f"本地兴趣匹配选择：{selected['bvid']}《{selected.get('title', '无标题')}》", "CANDIDATE")
     return selected
-from core.platform_actions import public_commenting_enabled, video_liking_enabled
+from ..core.platform_actions import public_commenting_enabled, video_liking_enabled
 
 
 class BrainLoopMixin:
@@ -142,7 +142,7 @@ class BrainLoopMixin:
         # 显示兴趣状态（v2.0: 同时检查新旧系统）
         interests_old = self.interest_mgr.get_interests()
         try:
-            from services.interest_engine import get_engine
+            from ..services.interest_engine import get_engine
             engine = get_engine()
             interests_new = engine.get_keywords()
         except ImportError:
@@ -499,7 +499,7 @@ class BrainLoopMixin:
                                 continue
 
                             try:
-                                from core.config import load_config
+                                from ..core.config import load_config
                                 browse_mode = load_config().get("video", {}).get("browse_mode", "candidate_review")
                             except Exception:
                                 browse_mode = config.get("video", {}).get("browse_mode", "candidate_review")
@@ -666,7 +666,7 @@ class BrainLoopMixin:
                         # The same CC track used for understanding is exposed to
                         # the learning-status page with its real timestamps.
                         try:
-                            from api.subtitles import get_cached_subtitle_timeline
+                            from ..api.subtitles import get_cached_subtitle_timeline
                             timeline = get_cached_subtitle_timeline(bvid)
                             segments = timeline.get("segments", []) if isinstance(timeline, dict) else []
                             self.update_video_observation(
@@ -795,7 +795,7 @@ class BrainLoopMixin:
                     interest_reason=interest_reason, score=score,
                 )
                 try:
-                    from services.local_favorites import auto_collect_video
+                    from ..services.local_favorites import auto_collect_video
                     local_favorite = auto_collect_video(
                         config,
                         {
@@ -1053,7 +1053,7 @@ class BrainLoopMixin:
                 if learn_success:
                     if self.private_message_mgr:
                         try:
-                            from services.owner_share import OwnerShareService
+                            from ..services.owner_share import OwnerShareService
                             share_result = await OwnerShareService().share_learned_video(
                                 lambda receiver_id, text: self.private_message_mgr.send_reply(
                                     receiver_id,
@@ -1128,7 +1128,7 @@ class BrainLoopMixin:
                         log(f"[STAR] 自动标记喜欢的UP主: @{up} (UID:{up_uid}) [评分:{score}, 概率:{fav_prob:.0%}]", "FAVORITE")
 
                 if do_like_trigger:
-                    from services.like_review import LikeReviewInbox, requires_review
+                    from ..services.like_review import LikeReviewInbox, requires_review
                     if requires_review(config, "video_like"):
                         LikeReviewInbox(DATA_DIR).propose(bvid, title, up, score, thought, video_url)
                         log("AI 点赞建议已进入审核收件箱，等待用户决定", "INFO")
@@ -1160,7 +1160,7 @@ class BrainLoopMixin:
                         log(f"点赞失败 (可能受限): {e}", "ERROR")
 
                 if do_fav:
-                    from services.like_review import ActionReviewInbox, requires_review
+                    from ..services.like_review import ActionReviewInbox, requires_review
                     if requires_review(config, "favorite"):
                         ActionReviewInbox(DATA_DIR).propose(
                             "favorite", f"收藏视频《{title}》", thought,
@@ -1202,7 +1202,7 @@ class BrainLoopMixin:
                         log(f"收藏失败: {e}", "ERROR")
 
                 if do_coin:
-                    from services.like_review import ActionReviewInbox, requires_review
+                    from ..services.like_review import ActionReviewInbox, requires_review
                     if requires_review(config, "coin"):
                         ActionReviewInbox(DATA_DIR).propose(
                             "coin", f"为视频《{title}》投币", thought,
@@ -1346,7 +1346,7 @@ class BrainLoopMixin:
 
                 # 🎯 记录观看标签（兴趣引擎新颖度追踪）
                 try:
-                    from services.interest_engine import get_engine
+                    from ..services.interest_engine import get_engine
                     engine = get_engine()
                     engine.record_watched(
                         tags=",".join(tags) if tags else "",

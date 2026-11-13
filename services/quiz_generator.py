@@ -23,8 +23,8 @@ from datetime import datetime
 from colorama import Fore, Style
 
 BASE_DIR = Path(__file__).resolve().parent.parent
-from core.user_data import DATA_DIR, HTML_EXPORTS_DIR
-from core.config import config as _core_config, resolve_knowledge_base_dir
+from ..core.user_data import DATA_DIR, HTML_EXPORTS_DIR
+from ..core.config import config as _core_config, resolve_knowledge_base_dir
 
 KNOWLEDGE_BASE_DIR = Path(resolve_knowledge_base_dir(_core_config))
 
@@ -97,7 +97,7 @@ QUIZ_STYLES = {
 }
 
 
-from services._services_ai import call_ai, _live_config
+from ._services_ai import call_ai, _live_config
 
 
 def _load_bili_cookies() -> dict:
@@ -115,7 +115,7 @@ def _load_bili_cookies() -> dict:
 async def fetch_video_subtitles(bvid: str) -> Optional[str]:
     """获取视频字幕文本"""
     try:
-        from api.subtitles import fetch_bilibili_subtitles
+        from ..api.subtitles import fetch_bilibili_subtitles
         cookies = _load_bili_cookies()
         result = await fetch_bilibili_subtitles(bvid, cookies_obj=cookies if cookies else None)
         if result and result.get("subtitle_text"):

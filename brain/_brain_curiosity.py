@@ -6,8 +6,8 @@ import json
 import asyncio
 import random
 
-from brain._mixin_imports import *
-from api.throttle import _bili_throttle
+from ._mixin_imports import *
+from ..api.throttle import _bili_throttle
 
 
 class BrainCuriosityMixin:

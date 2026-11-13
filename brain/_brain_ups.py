@@ -1,6 +1,6 @@
 """brain/_brain_ups.py — AgentBrain UP主管理 mixin"""
-from brain._mixin_imports import *
-from api.throttle import _bili_throttle
+from ._mixin_imports import *
+from ..api.throttle import _bili_throttle
 
 class BrainUpsMixin:
     """UP主管理"""

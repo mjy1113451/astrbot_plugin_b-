@@ -1,12 +1,12 @@
 """knowledge/revisit.py — 知识重温"""
 import asyncio, os, random
 from colorama import Fore, Style
-from core.config import config
-from core.globals import *
-from utils.display import log
-from utils.helpers import _mask_urls
-from knowledge.classifier import KnowledgeBaseClassifier
-from brain.video_analysis import _scan_knowledge_base_md_files
+from ..core.config import config
+from ..core.globals import *
+from ..utils.display import log
+from ..utils.helpers import _mask_urls
+from .classifier import KnowledgeBaseClassifier
+from ..brain.video_analysis import _scan_knowledge_base_md_files
 
 async def revisit_knowledge_video(bvid, title, up_name, category_path, file_path, mode="full"):
     """重温已学视频：完整管道(封面/标题/简介/评论/弹幕/视频内容/ASR/视觉帧) → AI决策 → 学习归档

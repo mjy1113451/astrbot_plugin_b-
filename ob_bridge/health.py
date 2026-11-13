@@ -6,9 +6,9 @@ import shlex
 import subprocess
 import sys
 
-from ob_bridge.client import OBClient
-from ob_bridge.types import OBMode, OBStatus
-from utils.display import log
+from .client import OBClient
+from .types import OBMode, OBStatus
+from ..utils.display import log
 
 
 # 安全:拒绝包含 shell 元字符或控制字符的命令,避免命令注入

@@ -7,8 +7,8 @@
 import re
 from typing import Optional
 
-from ob_bridge.client import OBClient
-from utils.display import log
+from .client import OBClient
+from ..utils.display import log
 
 
 # ── 策略模式匹配规则 ──

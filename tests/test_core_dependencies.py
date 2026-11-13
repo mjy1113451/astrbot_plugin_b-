@@ -16,6 +16,7 @@ from unittest.mock import Mock, patch
 
 ROOT = Path(__file__).resolve().parents[1]
 MAIN_PATH = ROOT / "main.py"
+PACKAGE = "_dependency_test_plugin"
 CORE_VERSIONS = {
     "openai": "1.78.0",
     "pydantic": "2.12.5",
@@ -61,14 +62,19 @@ def load_main():
     star = ModuleType("astrbot.api.star")
     star.Context = object
     star.Star = type("Star", (), {"__init__": lambda self, context: None})
+    package = ModuleType(PACKAGE)
+    package.__path__ = [str(ROOT)]
+    package.__package__ = PACKAGE
     modules = {
+        PACKAGE: package,
         "astrbot": ModuleType("astrbot"),
         "astrbot.api": api,
         "astrbot.api.event": event,
         "astrbot.api.star": star,
     }
-    spec = importlib.util.spec_from_file_location("dependency_test_main", MAIN_PATH)
+    spec = importlib.util.spec_from_file_location(f"{PACKAGE}.main", MAIN_PATH)
     module = importlib.util.module_from_spec(spec)
+    modules[spec.name] = module
     with patch.dict(sys.modules, modules), dependency_environment():
         spec.loader.exec_module(module)
     logger.reset_mock()
@@ -82,11 +88,16 @@ class CoreDependencyTests(unittest.TestCase):
     def test_loading_main_restores_astrbot_modules_and_keeps_business_imports_lazy(self):
         names = (
             "astrbot", "astrbot.api", "astrbot.api.event", "astrbot.api.star",
-            "core.config", "cli.app", "brain.agent_brain",
+            "core.config", "cli.app", "brain.agent_brain", PACKAGE,
+            f"{PACKAGE}.main", f"{PACKAGE}.core.config",
+            f"{PACKAGE}.cli.app", f"{PACKAGE}.brain.agent_brain",
         )
         missing = object()
         before = {name: sys.modules.get(name, missing) for name in names}
-        load_main()
+        path_before = sys.path.copy()
+        main, _ = load_main()
+        self.assertEqual(main.__package__, PACKAGE)
+        self.assertEqual(sys.path, path_before)
         for name, original in before.items():
             self.assertIs(sys.modules.get(name, missing), original, name)
 
@@ -191,18 +202,33 @@ class StartBotDependencyTests(unittest.IsolatedAsyncioTestCase):
         async def run():
             await asyncio.Event().wait()
 
-        brain = ModuleType("brain.agent_brain")
+        prefix = self.main.__package__
+        package = ModuleType(prefix)
+        package.__path__ = [str(ROOT)]
+        package.__package__ = prefix
+        core = ModuleType(f"{prefix}.core")
+        core.__path__ = [str(ROOT / "core")]
+        brain_package = ModuleType(f"{prefix}.brain")
+        brain_package.__path__ = [str(ROOT / "brain")]
+        brain = ModuleType(f"{prefix}.brain.agent_brain")
         brain.AgentBrain = Mock(return_value=SimpleNamespace(run=run))
-        with patch.dict(sys.modules, {"brain.agent_brain": brain}):
+        package.core = core
+        package.brain = brain_package
+        brain_package.agent_brain = brain
+        with patch.dict(sys.modules, {
+            prefix: package, f"{prefix}.main": self.main,
+            core.__name__: core, brain_package.__name__: brain_package,
+            brain.__name__: brain,
+        }):
             yield brain.AgentBrain
 
     async def test_panel_configuration_is_applied_before_brain_creation(self):
         panel = {"use_astrbot_config": True, "api": {"model_brain": "test-model"}}
         self.bot.config = panel
-        bridge = ModuleType("core.astrbot_config_bridge")
+        bridge = ModuleType(f"{self.main.__package__}.core.astrbot_config_bridge")
         bridge.apply_astrbot_config = Mock()
         with dependency_environment(), self.brain_environment() as factory, patch.dict(
-            sys.modules, {"core.astrbot_config_bridge": bridge}
+            sys.modules, {bridge.__name__: bridge}
         ):
             factory.side_effect = lambda: (
                 bridge.apply_astrbot_config.assert_called_once_with(panel)
@@ -213,10 +239,10 @@ class StartBotDependencyTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_invalid_panel_configuration_prevents_brain_creation(self):
         self.bot.config = {"use_astrbot_config": True}
-        bridge = ModuleType("core.astrbot_config_bridge")
+        bridge = ModuleType(f"{self.main.__package__}.core.astrbot_config_bridge")
         bridge.apply_astrbot_config = Mock(side_effect=ValueError("invalid configuration"))
         with dependency_environment(), self.brain_environment() as factory, patch.dict(
-            sys.modules, {"core.astrbot_config_bridge": bridge}
+            sys.modules, {bridge.__name__: bridge}
         ):
             replies = await self.start()
         self.assertIn("初始化失败", replies[0])

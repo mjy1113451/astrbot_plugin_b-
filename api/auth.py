@@ -12,9 +12,9 @@ from colorama import Fore, Style
 from bilibili_api import Credential
 from bilibili_api.login_v2 import QrCodeLoginEvents, QrCodeLogin
 
-from core.config import COOKIE_FILE, config, save_config
-from utils.display import log
-from api.throttle import _bili_throttle, _bili_trigger_cooldown
+from ..core.config import COOKIE_FILE, config, save_config
+from ..utils.display import log
+from .throttle import _bili_throttle, _bili_trigger_cooldown
 
 def clear_login_info():
     """清除登录信息"""
@@ -217,7 +217,7 @@ async def login_bilibili():
 
     # 🧹 登录成功后自动删除 qr_codes 文件夹中的二维码图片
     try:
-        from core.user_data import QR_CODES_DIR
+        from ..core.user_data import QR_CODES_DIR
         qr_dir = str(QR_CODES_DIR)
         if os.path.isdir(qr_dir):
             for fname in os.listdir(qr_dir):

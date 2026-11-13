@@ -51,6 +51,8 @@
 
 ## 安装
 
+针对 issue #39，请使用**包含修复的最新 `main` 分支**完整源码；插件市场包也需确认包含该修复。更新或重装前先备份私有配置、凭据和用户数据（位置见下文），**不要直接删除数据目录**。
+
 ### 方式一：插件市场
 
 在 AstrBot WebUI 的插件市场搜索 `B站学习助手` 或 `astrbot_plugin_bilibili_learning_bot`，安装后重载插件。
@@ -177,7 +179,19 @@ python -m unittest discover -s tests -v
 
 ---
 
-## FAQ
+## FAQ / 排障
+
+**Q：issue #39 报 `No module named cli`，要安装 `cli` / `utils` 吗？**
+这是插件内部模块路径或源码完整性问题，不是缺少同名 PyPI 依赖；**不要执行 `pip install cli` 或 `pip install utils`**。本修复使用包相对导入并恢复必要的 `utils/`，保留 `python main.py` 的私有命名空间 bootstrap，不向 `sys.path` 注入插件目录。请按安装说明更新完整源码，不要靠修改 `PYTHONPATH` 绕过问题。
+
+**Q：日志仍显示 `3.1.2`，能断定是缓存吗？**
+不能。请在日志指向的**实际安装目录**核对 `main.py` 的 `PLUGIN_VERSION`、`metadata.yaml` 的 `version`，并确认 commit SHA 与下载来源（仓库、分支或压缩包地址）。需据此区分旧包、来源不一致或缓存，不能仅凭版本日志下结论。
+
+**Q：`astrbot_plugin_biliscroll` 的 `yt-dlp` 错误也是 issue #39 吗？**
+不是同一问题。先按 traceback 中的插件名和文件路径定位；`astrbot_plugin_biliscroll` 是另一个插件，其 `yt-dlp` 下载错误应单独排查，不能与本插件的内部导入失败混为一谈。
+
+**Q：修复验证到什么范围？**
+测试验证了 namespaced（命名空间）加载及 `sys.path` 不被修改；尚未完成真实 AstrBot 环境配合 B 站账号的端到端（E2E）验证，不代表登录、浏览或互动全链路已实测。
 
 **Q：数据存放在哪里？**
 私有数据固定在 `%LOCALAPPDATA%\BiliLearn\Data`（可用 `BILI_USER_DATA_DIR` 覆盖）；知识库与导出产物在源码运行时位于项目根目录，打包运行时同样位于 `BiliLearn` 目录。
@@ -217,3 +231,18 @@ API Key、Cookie 等凭据仅保存在本地，请勿公开分享。
 - Private data lives in `%LOCALAPPDATA%\BiliLearn\Data` (override with `BILI_USER_DATA_DIR`).
 - Plugin panel settings take effect only when `use_astrbot_config` is enabled and the relevant groups are listed in `apply_sections`.
 - For installation dependency conflicts, verify that `metadata.yaml` and `main.py` report the same version as the installed package and that `requirements.txt` does not redeclare core-provided packages.
+- Install the complete source from the latest `main` containing the issue #39 fix; verify marketplace packages include it too. Back up private configuration, credentials and user data before updating or reinstalling; **do not delete data directories**.
+
+### FAQ / Troubleshooting
+
+**Q: Does `No module named cli` mean I should install `cli` or `utils`?**
+No. It indicates an internal module-path or incomplete-source problem, not a missing same-named PyPI dependency. **Do not run `pip install cli` or `pip install utils`.** The issue #39 fix uses package-relative imports and restores necessary `utils/` modules, while preserving the private-namespace bootstrap for `python main.py` without adding the plugin directory to `sys.path`. Update the complete source; do not work around this by changing `PYTHONPATH`.
+
+**Q: Do logs showing `3.1.2` prove a cache problem?**
+No. In the **actual installation directory** identified by the logs, compare `main.py`'s `PLUGIN_VERSION` with `metadata.yaml`'s `version`, and verify the commit SHA and download source (repository, branch or archive URL). Use that evidence to distinguish an old package, a source mismatch or caching; the version log alone is insufficient.
+
+**Q: Is an `astrbot_plugin_biliscroll` `yt-dlp` error the same issue?**
+No. Check the plugin name and file paths in the traceback. `astrbot_plugin_biliscroll` is a different plugin; investigate its `yt-dlp` download errors separately from this plugin's internal import failure.
+
+**Q: What has been verified?**
+Tests verify namespaced loading and that `sys.path` is unchanged. Real AstrBot plus Bilibili-account end-to-end (E2E) testing has **not** been completed; login, browsing and interactions are not claimed to be validated end to end.

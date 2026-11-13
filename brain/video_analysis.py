@@ -3,20 +3,20 @@ import asyncio, json, os, re, time, random, httpx, hashlib
 from pathlib import Path as _Path
 from bilibili_api.video import Video
 from colorama import Fore, Style
-from core.config import config
-from core.globals import *  # 所有运行时全局变量
-from utils.display import log
-from utils.helpers import sanitize_filename, _mask_urls
-from brain.agent_brain import AgentBrain
-from knowledge.classifier import KnowledgeBaseClassifier
-from api.subtitles import fetch_bilibili_subtitles, SYSTEM_PROMPT_BRAIN
-from core.config import get_bot_name
-from services.platform_adapter import (
+from ..core.config import config
+from ..core.globals import *  # 所有运行时全局变量
+from ..utils.display import log
+from ..utils.helpers import sanitize_filename, _mask_urls
+from .agent_brain import AgentBrain
+from ..knowledge.classifier import KnowledgeBaseClassifier
+from ..api.subtitles import fetch_bilibili_subtitles, SYSTEM_PROMPT_BRAIN
+from ..core.config import get_bot_name
+from ..services.platform_adapter import (
     extract_video_id,
     resolve_bilibili_short_url,
 )
 
-from utils.helpers import _safe_task_callback
+from ..utils.helpers import _safe_task_callback
 
 
 # ==============================================================================
@@ -793,7 +793,7 @@ async def manual_video_analysis(force_platform: str | None = "bilibili"):
 
     # ── 附加导出：把本次视频内容导出为 Word / PDF / PPT（与 W 命令共用逻辑）──
     try:
-        from services.document_export import export_video_content_interactive
+        from ..services.document_export import export_video_content_interactive
         _ctx = subtitle_text or ""
         if comment_text and comment_text != "[未读取评论]":
             _ctx += f"\n\n{comment_text}"
@@ -1375,8 +1375,8 @@ async def _agent_video_analysis(brain, bvid, title, up_name, video_url, aid=0):
         vector_hits = set()
         try:
             if KBSearchEngine:
-                from xingye_bot.settings import load_settings as _ls
-                from xingye_bot.state import BotState as _bs
+                from ..xingye_bot.settings import load_settings as _ls
+                from ..xingye_bot.state import BotState as _bs
                 _s = _ls()
                 _engine = KBSearchEngine(ModelClient(_s, _bs()))
                 _vec_results = _engine.search(query, top_k=10)
@@ -1418,7 +1418,7 @@ async def _agent_video_analysis(brain, bvid, title, up_name, video_url, aid=0):
 
     def _agent_read_file(rel_path):
         """读取知识库文件"""
-        from services.knowledge_tutor import safe_resolve
+        from ..services.knowledge_tutor import safe_resolve
         full_path = safe_resolve(rel_path)
         if full_path is None:
             return f"非法路径: {rel_path}\n禁止访问知识库外部路径"
@@ -1449,7 +1449,7 @@ async def _agent_video_analysis(brain, bvid, title, up_name, video_url, aid=0):
 
     async def _agent_delete_file(rel_path):
         """删除知识库文件（需4选1确认）"""
-        from services.knowledge_tutor import safe_resolve
+        from ..services.knowledge_tutor import safe_resolve
         full_path = safe_resolve(rel_path)
         if full_path is None:
             return f"非法路径: {rel_path}\n禁止访问知识库外部路径"
@@ -1478,7 +1478,7 @@ async def _agent_video_analysis(brain, bvid, title, up_name, video_url, aid=0):
 
     async def _agent_update_file(rel_path, new_content):
         """更新/新建知识库文件（需4选1确认）"""
-        from services.knowledge_tutor import safe_resolve
+        from ..services.knowledge_tutor import safe_resolve
         full_path = safe_resolve(rel_path)
         if full_path is None:
             return f"非法路径: {rel_path}\n禁止访问知识库外部路径"

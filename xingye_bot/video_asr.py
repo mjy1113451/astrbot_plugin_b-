@@ -22,7 +22,7 @@ def _hidden_subprocess_kwargs() -> dict:
 from .settings import DATA_DIR
 
 try:
-    from utils.helpers import find_ffmpeg
+    from ..utils.helpers import find_ffmpeg
 except ImportError:
     find_ffmpeg = None
 

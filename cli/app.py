@@ -35,33 +35,33 @@ def _plugin_version() -> str:
 
 
 # ===== 模块化导入 =====
-from persona.managers import PersonaManager, MoodManager, UserProfileManager, BotDiaryManager, SelfEvolutionManager, PrivateContextDB
-from security.guard import ReplySafetyGuard
+from ..persona.managers import PersonaManager, MoodManager, UserProfileManager, BotDiaryManager, SelfEvolutionManager, PrivateContextDB
+from ..security.guard import ReplySafetyGuard
 
-from services.utils import InterestManager, BiliToolbox
-from services.agent_service import AgentSkillRunner
-from services.knowledge_tutor import KnowledgeTutor, scan_md_files, read_md_file, write_md_file
+from ..services.utils import InterestManager, BiliToolbox
+from ..services.agent_service import AgentSkillRunner
+from ..services.knowledge_tutor import KnowledgeTutor, scan_md_files, read_md_file, write_md_file
 # CommentInteractionManager 已移至 brain/comment.py
 
 # ===== 工具函数导入（从 utils/ 模块） =====
-from utils.helpers import _mask_urls, sanitize_filename, ensure_ai_marker, unix_to_iso, parse_iso_datetime, human_reply_delay, _clean_ai_output
-from utils.lock import _acquire_bot_lock, _release_bot_lock
-from utils.display import log, mask_secret
+from ..utils.helpers import _mask_urls, sanitize_filename, ensure_ai_marker, unix_to_iso, parse_iso_datetime, human_reply_delay, _clean_ai_output
+from ..utils.lock import _acquire_bot_lock, _release_bot_lock
+from ..utils.display import log, mask_secret
 
 # ===== B站 API 层导入（从 bili/ 模块） =====
-from api.throttle import _bili_throttle, _bili_trigger_cooldown, _BILI_API_MIN_GAP
-from api.compat import request
-from api.client import BiliClient
-from api.auth import login_bilibili, is_bili_logged_in, check_login_status, clear_login_info
-from api.subtitles import fetch_bilibili_subtitles, _check_subtitle_mismatch
+from ..api.throttle import _bili_throttle, _bili_trigger_cooldown, _BILI_API_MIN_GAP
+from ..api.compat import request
+from ..api.client import BiliClient
+from ..api.auth import login_bilibili, is_bili_logged_in, check_login_status, clear_login_info
+from ..api.subtitles import fetch_bilibili_subtitles, _check_subtitle_mismatch
 
 # ===== 知识库模块导入（从 knowledge/ 模块） =====
-from knowledge.classifier import KnowledgeBaseClassifier
-from knowledge.web_search import web_search, verify_knowledge_with_ai, backup_and_rewrite_knowledge
-from knowledge.browse import count_knowledge_categories, browse_kb_structure, search_knowledge_content, cleanup_duplicates
-from knowledge.revisit import revisit_knowledge_video, revisit_knowledge_base_menu
-from knowledge.organize import organize_knowledge_base
-from knowledge.custom import (
+from ..knowledge.classifier import KnowledgeBaseClassifier
+from ..knowledge.web_search import web_search, verify_knowledge_with_ai, backup_and_rewrite_knowledge
+from ..knowledge.browse import count_knowledge_categories, browse_kb_structure, search_knowledge_content, cleanup_duplicates
+from ..knowledge.revisit import revisit_knowledge_video, revisit_knowledge_base_menu
+from ..knowledge.organize import organize_knowledge_base
+from ..knowledge.custom import (
     custom_knowledge_menu, _init_custom_knowledge_dir, _get_custom_knowledge_entries,
     _add_custom_knowledge, _list_custom_knowledge, _view_custom_knowledge,
     _edit_custom_knowledge, _delete_custom_knowledge, _search_custom_knowledge,
@@ -69,10 +69,10 @@ from knowledge.custom import (
 )
 
 # ===== 大脑模块导入（从 brain/ 模块） =====
-from brain.comment import CommentInteractionManager
-from brain.private_msg import PrivateMessageManager
-from brain.agent_brain import AgentBrain
-from brain.video_analysis import manual_video_analysis, up_homepage_learn
+from ..brain.comment import CommentInteractionManager
+from ..brain.private_msg import PrivateMessageManager
+from ..brain.agent_brain import AgentBrain
+from ..brain.video_analysis import manual_video_analysis, up_homepage_learn
 
 def _disclaimer_confirm():
     """显示红色免责声明，输入'我同意'后继续。"""
@@ -103,8 +103,8 @@ def _disclaimer_confirm():
     return True
 
 # [PSYCHO] 智能分析引擎
-from utils.storage import get_backup_dir, sanitize_config_for_export, strip_hidden_placeholders
-from core.user_data import (
+from ..utils.storage import get_backup_dir, sanitize_config_for_export, strip_hidden_placeholders
+from ..core.user_data import (
     DATA_DIR as _SHARED_DATA_DIR,
     HIGHLIGHTS_DIR as _SHARED_HIGHLIGHTS_DIR,
     HTML_EXPORTS_DIR as _SHARED_HTML_EXPORTS_DIR,
@@ -113,9 +113,9 @@ from core.user_data import (
     USER_DATA_DIR as _SHARED_USER_DATA_DIR,
     WORD_DIR as _SHARED_WORD_DIR,
 )
-from core.config import resolve_knowledge_base_dir
-from core.factory_reset import DEFAULT_RESET_GROUP_IDS, RESET_GROUPS, erase_all_user_data, preview_reset_targets
-from persona.psycho import (
+from ..core.config import resolve_knowledge_base_dir
+from ..core.factory_reset import DEFAULT_RESET_GROUP_IDS, RESET_GROUPS, erase_all_user_data, preview_reset_targets
+from ..persona.psycho import (
     PsychoProfile, RecommendationEngine,
     get_mode_emoji, get_mode_label,
 )
@@ -126,11 +126,11 @@ if hasattr(sys.stderr, "reconfigure"):
     sys.stderr.reconfigure(encoding="utf-8", errors="replace")  # type: ignore[attr-defined]
 
 try:
-    from xingye_bot.llm import ModelClient
-    from xingye_bot.settings import load_settings as load_modular_settings
-    from xingye_bot.state import BotState
-    from xingye_bot.video_modes import VideoUnderstanding, normalize_mode
-    from xingye_bot.kb_search import KBSearchEngine
+    from ..xingye_bot.llm import ModelClient
+    from ..xingye_bot.settings import load_settings as load_modular_settings
+    from ..xingye_bot.state import BotState
+    from ..xingye_bot.video_modes import VideoUnderstanding, normalize_mode
+    from ..xingye_bot.kb_search import KBSearchEngine
 except ImportError:
     ModelClient = None
     load_modular_settings = None
@@ -496,7 +496,7 @@ def _run_with_shared_config_path(operation):
     scoped to this call instead of accidentally writing user data to the real
     shared location.
     """
-    import core.config as shared_config
+    from ..core import config as shared_config
 
     cli_path = os.path.abspath(CONFIG_FILE)
     shared_path = os.path.abspath(shared_config.CONFIG_FILE)
@@ -844,7 +844,7 @@ KNOWLEDGE_BASE_DIR = str(resolve_knowledge_base_dir(config))
 DRY_GOODS_DIR = str(_SHARED_HIGHLIGHTS_DIR)
 LEARNING_LOG_FILE = os.path.join(str(_SHARED_USER_DATA_DIR), "learning_log.md")
 KB_METADATA_FILE = os.path.join(str(_SHARED_USER_DATA_DIR), "knowledge_metadata.json")
-from core.config import CIPHER_KEY_FILE
+from ..core.config import CIPHER_KEY_FILE
 
 
 # ==============================================================================
@@ -1126,7 +1126,7 @@ def open_web_panel():
     """打开网页端：若未运行则后台启动 web_panel.py，再打开浏览器。"""
     import subprocess
     import webbrowser
-    from utils.web_launcher import (
+    from ..utils.web_launcher import (
         find_available_port,
         get_web_port,
         is_our_panel,
@@ -1298,10 +1298,10 @@ async def _mindmap_from_video_input(cfg):
     """🧠 思维导图：输入视频(链接/BV/标题/UP主) → 抓取字幕 → 生成思维导图。
     复用手动视频分析的解析与字幕获取逻辑，而非只从已有知识库导出。"""
     try:
-        from brain.video_analysis import AgentBrain, _extract_bvid, _resolve_b23_short
-        from api.subtitles import fetch_bilibili_subtitles
-        from core.config import COOKIE_FILE
-        from services.mindmap_export import export_mindmap
+        from ..brain.video_analysis import AgentBrain, _extract_bvid, _resolve_b23_short
+        from ..api.subtitles import fetch_bilibili_subtitles
+        from ..core.config import COOKIE_FILE
+        from ..services.mindmap_export import export_mindmap
     except Exception as e:
         print(f"{Fore.RED}[ERROR] 思维导图模块加载失败: {e}{Style.RESET_ALL}")
         return
@@ -1453,7 +1453,7 @@ async def _ai_summarize_subs_to_outline(title, up_name, desc, subs, cfg):
     """用本项目统一 AI 通道把字幕/简介归纳为结构化思维导图大纲（## 主分支 / ### 子分支 / - 要点）。
     失败或未配置 AI 时返回 None，调用方停止生成。"""
 
-    from services._services_ai import call_ai
+    from ..services._services_ai import call_ai
     api_cfg = cfg.get("api", {}) if isinstance(cfg, dict) else {}
     api_key = (api_cfg.get("unified_api_key") or "").strip() or UNIFIED_API_KEY
     base_url = (api_cfg.get("unified_base_url") or "").strip() or UNIFIED_BASE_URL
@@ -1504,7 +1504,7 @@ async def _ai_summarize_subs_to_outline(title, up_name, desc, subs, cfg):
 def show_mindmap_menu():
     """🧠 思维导图：把已学知识（单个视频 / 整个知识库）或输入视频导出为可交互 HTML 思维导图。"""
     try:
-        from services.mindmap_export import export_mindmap
+        from ..services.mindmap_export import export_mindmap
     except Exception as e:
         print(f"{Fore.RED}[ERROR] 思维导图模块加载失败: {e}{Style.RESET_ALL}")
         input("按回车返回...")
@@ -2007,8 +2007,8 @@ def configure_api_url():
         UNIFIED_BASE_URL = new_url
         # 🔧 同步更新 core.config 和 core.globals 中的模块级变量
         try:
-            import core.config as _cfg
-            import core.globals as _glo
+            from ..core import config as _cfg
+            from ..core import globals as _glo
             _cfg.UNIFIED_BASE_URL = new_url
             _glo.UNIFIED_BASE_URL = new_url
         except Exception:
@@ -2059,7 +2059,7 @@ def configure_html_model():
 
 def configure_provider_preset():
     """选择内置厂商预设，自动填入官方 OpenAI 兼容的 Base URL 与默认模型。"""
-    from core.config import PROVIDER_PRESETS
+    from ..core.config import PROVIDER_PRESETS
     global UNIFIED_BASE_URL, MODEL_BRAIN, MODEL_VISION, MODEL_HTML
     print(f"\n{Fore.CYAN}━━━ 选择厂商预设 (内置官方 OpenAI 兼容格式) ━━━{Style.RESET_ALL}")
     keys = list(PROVIDER_PRESETS.keys())
@@ -2095,8 +2095,8 @@ def configure_provider_preset():
     MODEL_VISION = p["vision"]
     MODEL_HTML = p.get("fast") or p["chat"]
     try:
-        import core.config as _cfg
-        import core.globals as _glo
+        from ..core import config as _cfg
+        from ..core import globals as _glo
         _cfg.UNIFIED_BASE_URL = UNIFIED_BASE_URL
         _glo.UNIFIED_BASE_URL = UNIFIED_BASE_URL
     except Exception:
@@ -2485,7 +2485,7 @@ def _configure_asr_settings():
         ASR_BACKEND = new_backend
         asr_cfg["backend"] = new_backend
         # 清除缓存
-        from xingye_bot.asr_engine import _asr_engine as _eng
+        from ..xingye_bot.asr_engine import _asr_engine as _eng
         if _eng:
             _eng._model = None
             _eng._backend_loaded = ""
@@ -2542,7 +2542,7 @@ def _configure_asr_settings():
             ASR_FUNASR_HOTWORD = raw_hw
 
         # 清除 FunASR 缓存
-        from xingye_bot.asr_engine import _asr_engine as _eng
+        from ..xingye_bot.asr_engine import _asr_engine as _eng
         if _eng:
             _eng._model = None
             _eng._backend_loaded = ""
@@ -2603,7 +2603,7 @@ def _configure_asr_settings():
     if new_dev in ("cpu", "cuda"):
         asr_cfg["device"] = new_dev
         ASR_DEVICE = new_dev
-        from xingye_bot.asr_engine import _asr_engine as _eng
+        from ..xingye_bot.asr_engine import _asr_engine as _eng
         if _eng:
             _eng.device = new_dev
             _eng._model = None
@@ -2617,7 +2617,7 @@ def _configure_asr_settings():
             asr_cfg["whisper_model"] = new_model
             ASR_WHISPER_MODEL = new_model
             print(f"{Fore.GREEN}[OK] Whisper模型已更新为 {new_model}{Style.RESET_ALL}")
-            from xingye_bot.asr_engine import _asr_engine as _eng
+            from ..xingye_bot.asr_engine import _asr_engine as _eng
             if _eng:
                 _eng._model = None
                 _eng._backend_loaded = ""
@@ -2960,7 +2960,7 @@ def show_learning_tools_menu():
             break
         elif choice == "1":
             try:
-                from services.learning_agent import quiz_with_mode
+                from ..services.learning_agent import quiz_with_mode
                 import asyncio
                 asyncio.run(quiz_with_mode())
             except Exception as e:
@@ -2969,7 +2969,7 @@ def show_learning_tools_menu():
                 traceback.print_exc()
         elif choice == "2":
             try:
-                from services.learning_agent import deep_dive_with_mode
+                from ..services.learning_agent import deep_dive_with_mode
                 import asyncio
                 asyncio.run(deep_dive_with_mode())
             except Exception as e:
@@ -2978,7 +2978,7 @@ def show_learning_tools_menu():
                 traceback.print_exc()
         elif choice == "3":
             try:
-                from services.deep_dive import export_deep_dive_menu_cli
+                from ..services.deep_dive import export_deep_dive_menu_cli
                 export_deep_dive_menu_cli()
             except Exception as e:
                 print(f"{Fore.RED}[ERROR] 深入报告导出异常: {e}{Style.RESET_ALL}")
@@ -3166,7 +3166,7 @@ def show_interest_menu():
 # ═══════════════════════════════════════════════════════════
 def show_interest_prefs_menu():
     """🎯 兴趣偏好设置 — 智能引擎 v2.0 全功能菜单"""
-    from services.interest_engine import get_engine, reset_engine
+    from ..services.interest_engine import get_engine, reset_engine
 
     engine = get_engine()
 
@@ -3370,7 +3370,7 @@ def show_interest_prefs_menu():
             print(f"{Fore.YELLOW}[INFO] 正在从PsychoProfile同步...{Style.RESET_ALL}")
             try:
                 # 延迟导入避免循环依赖
-                from brain.agent_brain import AgentBrain
+                from ..brain.agent_brain import AgentBrain
                 # 尝试获取psycho_profile（需运行中的实例）
                 # 从已缓存的brain实例获取
                 added = 0
@@ -3418,7 +3418,7 @@ def show_interest_prefs_menu():
             confirm = input(f"{Fore.RED}确认恢复默认推荐配置？这会清除所有自定义设置！(y/N): {Style.RESET_ALL}").strip().lower()
             if confirm == 'y':
                 import copy
-                from services.interest_engine import DEFAULT_ENGINE_CONFIG
+                from ..services.interest_engine import DEFAULT_ENGINE_CONFIG
                 engine.config = copy.deepcopy(DEFAULT_ENGINE_CONFIG)
                 engine.save()
                 reset_engine()
@@ -3653,7 +3653,7 @@ def show_reply_safety_menu():
 
 def configure_owner_share():
     """Configure opt-in learned-video sharing to the owner's Bilibili UID."""
-    from services.owner_share import OwnerShareService
+    from ..services.owner_share import OwnerShareService
 
     while True:
         share = config.setdefault("owner_share", {})
@@ -4637,8 +4637,8 @@ def show_knowledge_base_menu():
             print(f"\n{Fore.CYAN}🧠 正在重建知识库向量索引...{Style.RESET_ALL}")
             try:
                 if KBSearchEngine:
-                    from xingye_bot.settings import load_settings as _ls
-                    from xingye_bot.state import BotState as _bs
+                    from ..xingye_bot.settings import load_settings as _ls
+                    from ..xingye_bot.state import BotState as _bs
                     _s = _ls()
                     _engine = KBSearchEngine(ModelClient(_s, _bs()))
                     count = _engine.build_index()
@@ -4969,9 +4969,9 @@ async def manual_visual_note_analysis():
         print(f"{Fore.RED}[ERROR] 图文学习笔记模块未加载，请检查 xingye_bot 包{Style.RESET_ALL}")
         return
 
-    from xingye_bot.video_modes import extract_bvid
-    from services.platform_adapter import resolve_bilibili_short_url
-    from core.config import KNOWLEDGE_BASE_DIR
+    from ..xingye_bot.video_modes import extract_bvid
+    from ..services.platform_adapter import resolve_bilibili_short_url
+    from ..core.config import KNOWLEDGE_BASE_DIR
 
     print(f"\n{Fore.CYAN}+{'='*60}+{Style.RESET_ALL}")
     print(f"{Fore.CYAN}|           📝 图文学习笔记 - 目录+AI配图全过程讲解             |{Style.RESET_ALL}")
@@ -5017,7 +5017,7 @@ async def manual_visual_note_analysis():
             return
 
         video_path = await vu.download_video(asset)
-        import xingye_bot.grid_frames as gf
+        from ..xingye_bot import grid_frames as gf
         grid_imgs = gf.extract_visual_note_grids(video_path, config.get("video", {}))
         if not grid_imgs:
             print(f"{Fore.RED}[ERROR] 网格抽帧为空，无法生成图文笔记{Style.RESET_ALL}")
@@ -5094,7 +5094,7 @@ async def video_to_html_bg(query: str | None = None):
     interactive = query is None
 
     # ── 第一步：判断输入类型（复用 V 功能的 _extract_bvid + _resolve_b23_short）──
-    from brain.video_analysis import _extract_bvid, _resolve_b23_short
+    from ..brain.video_analysis import _extract_bvid, _resolve_b23_short
     bvid = None
     title = None
     up_name = None
@@ -5626,9 +5626,9 @@ async def video_to_html_bg(query: str | None = None):
     is_claude_style = style == 'claude_slides'
     is_slide_format = output_format in ('ppt', 'animation', 'tech_explainer', 'ppt_explainer') or style == 'claude_slides'
 
-    from xingye_bot.settings import load_settings as _ls
-    from xingye_bot.llm import ModelClient as _MC
-    from xingye_bot.state import BotState as _BS
+    from ..xingye_bot.settings import load_settings as _ls
+    from ..xingye_bot.llm import ModelClient as _MC
+    from ..xingye_bot.state import BotState as _BS
     _s = _ls()
     client = _MC(_s, _BS())
 
@@ -5636,7 +5636,7 @@ async def video_to_html_bg(query: str | None = None):
     if is_claude_style and is_slide_format:
         # 专业管道: build_slide_prompt (含Claude设计系统+完整字幕) → LLM → build_full_html (CSS/JS模板包装)
         try:
-            from services.video_to_ppt import build_slide_prompt, build_full_html
+            from ..services.video_to_ppt import build_slide_prompt, build_full_html
 
             video_info = {
                 'title': title,
@@ -5798,7 +5798,7 @@ Link: {video_url}
         # ── Flask 预览（仅交互式 CLI；非交互/AstrBot 环境下不启动本地服务）──
         if interactive:
             try:
-                from services.video_to_ppt import start_preview_server, stop_preview_server
+                from ..services.video_to_ppt import start_preview_server, stop_preview_server
                 preview_url = start_preview_server(html)
                 print(f"\n{Fore.CYAN}🌐 Flask预览服务已启动: {preview_url}{Style.RESET_ALL}")
 
@@ -5966,7 +5966,7 @@ Link: {video_url}
 
         # ── 附加导出：Word / PDF / PPT（交互式菜单，非交互模式跳过）──
         if interactive:
-            from services.document_export import export_video_content_interactive
+            from ..services.document_export import export_video_content_interactive
             await export_video_content_interactive(
                 title, up_name, video_url, ctx,
                 stats=stats, desc=desc, bvid=bvid, brain=brain)
@@ -6114,9 +6114,9 @@ def _show_bg_tasks():
 
 async def _bg_html_gen(tid, bvid, title, up_name, style, custom):
     try:
-        from xingye_bot.settings import load_settings as _ls
-        from xingye_bot.llm import ModelClient as _MC
-        from xingye_bot.state import BotState as _BS
+        from ..xingye_bot.settings import load_settings as _ls
+        from ..xingye_bot.llm import ModelClient as _MC
+        from ..xingye_bot.state import BotState as _BS
         _s, _st = _ls(), _BS(); _mc = _MC(_s, _st)
         ok, subs, desc, _ = await fetch_bilibili_subtitles(bvid, title=title)
         ctx = subs if ok and subs and len(subs)>30 else f"{title}. {desc}"
@@ -6162,8 +6162,8 @@ def quick_factory_reset_all():
     """R command: erase every private record and generated artifact in one reset."""
     global config
     from copy import deepcopy
-    from core.config import CIPHER_KEY_FILE, DATA_DIR as ACTIVE_DATA_DIR
-    from core.user_data import USER_DATA_DIR
+    from ..core.config import CIPHER_KEY_FILE, DATA_DIR as ACTIVE_DATA_DIR
+    from ..core.user_data import USER_DATA_DIR
 
     print(f"\n{Fore.RED}{'=' * 60}{Style.RESET_ALL}")
     print(f"{Fore.RED}  恢复出厂设置：彻底清除全部私人数据{Style.RESET_ALL}")
@@ -6845,7 +6845,7 @@ def import_config():
 # ═══════════════════════════════════════════════════════════════
 def _configure_standby_settings():
     """待机模式完整设置：ASR/总结/评论区/PPT/视频触发 等全部选项"""
-    from brain.standby import load_standby_config, save_standby_config, load_stats
+    from ..brain.standby import load_standby_config, save_standby_config, load_stats
     sc = load_standby_config()
     st = load_stats()
 
@@ -7027,7 +7027,7 @@ def _configure_standby_settings():
             sc["ppt_auto_generate"] = not sc.get("ppt_auto_generate", False)
             print(f"{Fore.GREEN}[OK] PPT自动生成已{'开启' if sc['ppt_auto_generate'] else '关闭'}{Style.RESET_ALL}")
         elif choice == "17":
-            from services.video_to_ppt import THEMES
+            from ..services.video_to_ppt import THEMES
             print(f"{Fore.CYAN}可用PPT主题:{Style.RESET_ALL}")
             for i, (k, v) in enumerate(THEMES.items(), 1):
                 sel = " ← 当前" if k == sc.get("ppt_theme") else ""
@@ -7146,8 +7146,8 @@ def _reload_all_globals(new_config: dict):
 
     # 🔧 同步更新 core.config 和 core.globals 中的模块级变量
     try:
-        import core.config as _cfg
-        import core.globals as _glo
+        from ..core import config as _cfg
+        from ..core import globals as _glo
         _cfg.UNIFIED_API_KEY = UNIFIED_API_KEY
         _cfg.UNIFIED_BASE_URL = UNIFIED_BASE_URL
         _cfg.MODEL_BRAIN = MODEL_BRAIN
@@ -7404,11 +7404,11 @@ def _reload_all_globals(new_config: dict):
     AUTO_RECLASSIFY_CLEAN_EMPTY = kb.get("auto_reclassify_clean_empty", True)
 
     sp = new_config.get("speed", {})
-    import api.throttle
-    api.throttle._BILI_API_MIN_GAP = float(sp.get("api_min_gap", 0.3))
+    from ..api import throttle as _api_throttle
+    _api_throttle._BILI_API_MIN_GAP = float(sp.get("api_min_gap", 0.3))
     NO_HUMAN_DELAY = sp.get("no_human_delay", False)
     try:
-        import core.globals as _glo_speed
+        from ..core import globals as _glo_speed
         _glo_speed.NO_HUMAN_DELAY = NO_HUMAN_DELAY
     except Exception:
         pass

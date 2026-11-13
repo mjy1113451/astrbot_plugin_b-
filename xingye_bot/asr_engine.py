@@ -208,7 +208,7 @@ class ASREngine:
             return self.funasr_model_dir
         # 默认路径：项目下的 model/asr，自动创建目录
         if getattr(sys, "frozen", False):
-            from core.user_data import USER_DATA_DIR
+            from ..core.user_data import USER_DATA_DIR
             default = USER_DATA_DIR / "models" / "asr"
         else:
             default = Path(__file__).parent.parent / "model" / "asr"

@@ -3,8 +3,8 @@ import time
 import random
 import asyncio
 
-from core.config import config
-from utils.display import log
+from ..core.config import config
+from ..utils.display import log
 
 # ── 全局节流变量 ──
 _last_bili_api_call = 0.0

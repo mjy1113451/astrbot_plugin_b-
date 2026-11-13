@@ -8,18 +8,18 @@ import time
 
 from colorama import Fore, Style
 
-from core.config import (
+from ..core.config import (
     config, COMMENT_LOG_FILE, COMMENT_MODE, BEHAVIOR_COMMENT_USER_COOLDOWN_MINUTES,
     MAX_REPLIES_PER_CHECK, PROB_COMMENT_OTHERS,
 )
-from persona.managers import PersonaManager, MoodManager, UserProfileManager, PrivateContextDB
-from security.guard import ReplySafetyGuard
-from utils.display import log
+from ..persona.managers import PersonaManager, MoodManager, UserProfileManager, PrivateContextDB
+from ..security.guard import ReplySafetyGuard
+from ..utils.display import log
 from datetime import datetime
-from utils.helpers import _mask_urls, parse_iso_datetime, ensure_ai_marker
-from api.throttle import _bili_throttle, _bili_trigger_cooldown
-from core.platform_actions import public_commenting_enabled
-from services.utils import BiliToolbox
+from ..utils.helpers import _mask_urls, parse_iso_datetime, ensure_ai_marker
+from ..api.throttle import _bili_throttle, _bili_trigger_cooldown
+from ..core.platform_actions import public_commenting_enabled
+from ..services.utils import BiliToolbox
 
 # bilibili_api imports (used by the class)
 from bilibili_api import comment, session, user
@@ -30,11 +30,11 @@ COMMENT_THREAD_MAX_TURNS = 1000
 
 # Optional xingye_bot imports
 try:
-    from xingye_bot.llm import ModelClient
-    from xingye_bot.settings import load_settings as load_modular_settings
-    from xingye_bot.state import BotState
-    from xingye_bot.video_modes import VideoUnderstanding, normalize_mode
-    from xingye_bot.kb_search import KBSearchEngine
+    from ..xingye_bot.llm import ModelClient
+    from ..xingye_bot.settings import load_settings as load_modular_settings
+    from ..xingye_bot.state import BotState
+    from ..xingye_bot.video_modes import VideoUnderstanding, normalize_mode
+    from ..xingye_bot.kb_search import KBSearchEngine
 except ImportError:
     ModelClient = None
     load_modular_settings = None
@@ -550,7 +550,7 @@ class CommentInteractionManager:
     async def reply_to_comment(self, bili_client, comment_data, ai_response, *, is_at_mention=False):
         """Reply to a comment. Explicit @ mentions use a separate policy gate."""
         self.last_reply_failure = {}
-        from core.platform_actions import at_mention_replies_enabled
+        from ..core.platform_actions import at_mention_replies_enabled
         allowed = at_mention_replies_enabled() if is_at_mention else public_commenting_enabled()
         if not allowed:
             action = "@我回复" if is_at_mention else "评论与评论点赞"
@@ -746,7 +746,7 @@ class CommentInteractionManager:
                     只返回回复内容，不要有其他文字。
                     """
                     
-                    from services._services_ai import call_ai
+                    from ..services._services_ai import call_ai
                     reply_content = await call_ai(
                         messages=[
                             {"role": "system", "content": "你是一个友好的B站用户，正在回复别人的评论。"},

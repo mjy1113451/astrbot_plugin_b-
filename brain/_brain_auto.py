@@ -1,5 +1,5 @@
 """brain/_brain_auto.py — AgentBrain 自动日记/进化/Agent任务 mixin"""
-from brain._mixin_imports import *
+from ._mixin_imports import *
 
 class BrainAutoMixin:
     """自动日记、自我进化、Agent目标执行、深度搜索主题选择"""

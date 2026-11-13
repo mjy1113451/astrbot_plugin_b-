@@ -6,13 +6,13 @@ import shutil
 from datetime import datetime
 from colorama import Fore, Style
 
-from core.config import config, KNOWLEDGE_BASE_DIR
-from core.user_data import USER_DATA_DIR
-from utils.helpers import sanitize_filename
-from brain.decision import decode_ai_mapping
+from ..core.config import config, KNOWLEDGE_BASE_DIR
+from ..core.user_data import USER_DATA_DIR
+from ..utils.helpers import sanitize_filename
+from ..brain.decision import decode_ai_mapping
 
 KB_METADATA_FILE = str(USER_DATA_DIR / "knowledge_metadata.json")
-from utils.display import log
+from ..utils.display import log
 
 
 def _decode_ai_mapping(raw):
@@ -22,7 +22,7 @@ def _decode_ai_mapping(raw):
 
 # ── 统一 AI 调用（不再依赖 openai / xingye_bot） ──
 async def _ai_chat(messages, model="", timeout=15, temperature=0.7):
-    from services._services_ai import call_ai
+    from ..services._services_ai import call_ai
     return await call_ai(messages=messages, model=model, timeout=timeout,
                          temperature=temperature, verbose=False)
 

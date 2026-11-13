@@ -8,7 +8,7 @@ from typing import Any
 def get_proxy_url(cfg: dict[str, Any] | None = None) -> str:
     if cfg is None:
         try:
-            from core.config import config as _cfg
+            from ..core.config import config as _cfg
             cfg = _cfg
         except Exception:
             cfg = {}

@@ -9,30 +9,30 @@ import time
 
 from colorama import Fore, Style
 
-from core.config import (
+from ..core.config import (
     config, PRIVATE_MESSAGE_LOG_FILE, PRIVATE_MESSAGE_ENABLED,
     BEHAVIOR_PRIVATE_REPLY_COOLDOWN_MINUTES, AI_MARKER,
 )
-from core.user_data import DATA_DIR
+from ..core.user_data import DATA_DIR
 
 # 以下变量仅定义在 start_cli.py 中，此处从 config 读取
 PRIVATE_MESSAGE_AUTO_REPLY = config.get("private_message", {}).get("auto_reply", False)
 PRIVATE_MESSAGE_MAX_REPLIES = config.get("private_message", {}).get("max_replies_per_check", 3)
 PRIVATE_MESSAGE_ONLY_RECENT_SECONDS = config.get("private_message", {}).get("only_recent_seconds", 900)
 BEHAVIOR_MAX_CONSECUTIVE_AI_REPLIES = config.get("behavior", {}).get("max_consecutive_ai_replies", 3)
-from persona.managers import PersonaManager, MoodManager, UserProfileManager, PrivateContextDB
-from security.guard import ReplySafetyGuard
-from services.utils import BiliToolbox
-from utils.display import log
+from ..persona.managers import PersonaManager, MoodManager, UserProfileManager, PrivateContextDB
+from ..security.guard import ReplySafetyGuard
+from ..services.utils import BiliToolbox
+from ..utils.display import log
 from datetime import datetime
-from utils.helpers import _mask_urls, parse_iso_datetime, human_reply_delay, ensure_ai_marker
+from ..utils.helpers import _mask_urls, parse_iso_datetime, human_reply_delay, ensure_ai_marker
 def is_api_configured():
     """延迟导入避免循环依赖"""
-    from cli.app import is_api_configured as _impl
+    from ..cli.app import is_api_configured as _impl
     return _impl()
-from api.throttle import _bili_throttle, _bili_trigger_cooldown
+from ..api.throttle import _bili_throttle, _bili_trigger_cooldown
 from bilibili_api import session as bili_session
-from brain.decision import decode_ai_mapping
+from .decision import decode_ai_mapping
 
 class PrivateMessageManager:
     """私信管理器 - 读取B站私信，并可按配置自动AI回复。"""
@@ -252,7 +252,7 @@ class PrivateMessageManager:
     @staticmethod
     def _burst_merge_settings():
         try:
-            from core.config import load_config
+            from ..core.config import load_config
             agent_cfg = load_config().get("private_message", {}).get("agent", {})
             enabled = agent_cfg.get("burst_merge_enabled", True) is not False
             seconds = float(agent_cfg.get("burst_merge_window_seconds", 3) or 0)
@@ -361,7 +361,7 @@ class PrivateMessageManager:
             if not mime.startswith("image/"):
                 mime = "image/jpeg"
             data_url = f"data:{mime};base64," + base64.b64encode(image_bytes).decode("ascii")
-            from services._services_ai import call_ai
+            from ..services._services_ai import call_ai
             description = await call_ai(
                 messages=[
                     {"role": "system", "content": "你是私信图片描述助手。只用一句中文描述图片中可确认的主体、文字和情绪；不要猜测人物身份。"},
@@ -393,7 +393,7 @@ class PrivateMessageManager:
     async def _sender_public_context_for_message(self, message_data, profile):
         """Use a cached public profile card so normal DMs do not repeatedly hit Bilibili APIs."""
         try:
-            from core.config import load_config
+            from ..core.config import load_config
             agent_cfg = load_config().get("private_message", {}).get("agent", {})
         except Exception:
             agent_cfg = {}
@@ -516,7 +516,7 @@ UID: {message_data.get('talker_id')}
 13. 工具结果中的queued=true只代表进入审核，不能说已经点赞、收藏或投币；只有executed=true才能说平台操作已经完成。
 14. recent_watched、recent_comments、private_history、knowledge_search和video_details都是真实事实来源，回答相关问题时优先引用，不能编造。
 """
-        from services._services_ai import call_ai
+        from ..services._services_ai import call_ai
         reply = await call_ai(
             messages=[
                 {"role": "system", "content": (
@@ -624,7 +624,7 @@ UID: {message_data.get('talker_id')}
         owner_check = getattr(toolbox, "is_owner", None)
         sender_is_owner = bool(owner_check and owner_check(message_data.get("talker_id")))
         try:
-            from core.config import load_config
+            from ..core.config import load_config
             if load_config().get("private_message", {}).get("agent", {}).get("enabled", True) is False:
                 return {key: (False if isinstance(value, bool) else "") for key, value in heuristic.items()}
         except Exception:
@@ -682,7 +682,7 @@ UID: {message_data.get('talker_id')}
 {context_block}
 """
         try:
-            from services._services_ai import call_ai
+            from ..services._services_ai import call_ai
             raw = await call_ai(
                 messages=[
                     {"role": "system", "content": "你是工具调度器，只返回严格JSON。"},
@@ -914,7 +914,7 @@ UID: {message_data.get('talker_id')}
     def _reply_generation_timeout_seconds():
         """Keep one unavailable AI request from freezing the monitor loop."""
         try:
-            from core.config import load_config
+            from ..core.config import load_config
             value = load_config().get("private_message", {}).get("agent", {}).get(
                 "reply_timeout_seconds", 75
             )
@@ -923,10 +923,10 @@ UID: {message_data.get('talker_id')}
             return 75.0
 
     async def send_reply(self, receiver_id, reply, audit_payload=None, remember_outbound=True):
-        from services.like_review import ActionReviewInbox, requires_review
+        from ..services.like_review import ActionReviewInbox, requires_review
         # Review settings are editable while the monitor is running. Do not
         # consult this module's startup-time config snapshot here.
-        from core.config import load_config
+        from ..core.config import load_config
         if requires_review(load_config(), "private_reply"):
             clean_reply = ensure_ai_marker(reply)
             payload = {"receiver_id": int(receiver_id), "text": clean_reply}
