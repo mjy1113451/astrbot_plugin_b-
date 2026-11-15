@@ -7,6 +7,7 @@ import asyncio
 import random
 
 from ._mixin_imports import *
+from ..utils.display import log_exception
 from ..api.throttle import _bili_throttle
 
 
@@ -54,14 +55,14 @@ class BrainCuriosityMixin:
                         break
                     search_results = await self.agent_runner._search_videos(current_query, count=min(8, max_videos - videos_watched))
                     if isinstance(search_results, dict) and search_results.get("error"):
-                        log(f"搜索失败: {search_results.get('error')}", "WARN")
+                        log("深度搜索未返回可用结果", "WARN")
                         break
                     if not search_results:
                         log("搜索无结果，换个关键词试试...", "INFO")
                         current_query = f"{topic} 科普" if "科普" not in current_query else f"{topic} 介绍"
                         continue
                 except Exception as e:
-                    log(f"搜索异常: {e}", "WARN")
+                    log_exception("深度搜索异常", e)
                     break
                 
                 # 逐个观看搜索到的视频
@@ -91,9 +92,9 @@ class BrainCuriosityMixin:
                                 _desc = getattr(self, "_last_video_desc", "")
                                 await self.learn_from_video(bvid, title, up, video_url, str(subtitle), topic, video_desc=_desc)
                             except Exception as learn_e:
-                                log(f"深度搜索学习归档失败: {learn_e}", "WARN")
+                                log_exception("深度搜索学习归档失败", learn_e)
                     except Exception as e:
-                        log(f"深度看视频失败: {e}", "WARN")
+                        log_exception("深度看视频失败", e)
                     
                     await asyncio.sleep(random.uniform(0.3, 0.8))
             
@@ -163,7 +164,7 @@ class BrainCuriosityMixin:
                         log(f"[OK] 深度搜索完成！满意度: {dive_decision.get('satisfaction', 0):.0%} | 丰度:{content_richness:.0%}({tier_label}) | 共看{videos_watched}个 | 原因: {dive_decision.get('reason', '')}", "SUCCESS")
                         break
                 except Exception as e:
-                    log(f"深度搜索决策失败: {e}", "WARN")
+                    log_exception("深度搜索决策失败", e)
                     break
             else:
                 break
@@ -184,6 +185,6 @@ class BrainCuriosityMixin:
                         source="curiosity_dive"
                     )
             except Exception as e:
-                log(f"记录深度搜索结果失败: {e}", "WARN")
+                log_exception("记录深度搜索结果失败", e)
         
         return videos_watched, key_findings

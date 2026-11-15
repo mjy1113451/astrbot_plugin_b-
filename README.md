@@ -51,7 +51,7 @@
 
 ## 安装
 
-针对 issue #39，请使用**包含修复的最新 `main` 分支**完整源码；插件市场包也需确认包含该修复。更新或重装前先备份私有配置、凭据和用户数据（位置见下文），**不要直接删除数据目录**。
+针对 issues #39 / #41，请使用**包含修复的最新 `main` 分支**完整源码；插件市场包也需确认包含对应修复。更新或重装前先备份私有配置、凭据和用户数据（位置见下文），**不要直接删除数据目录**。
 
 ### 方式一：插件市场
 
@@ -80,8 +80,8 @@ git clone https://github.com/mjy1113451/astrbot_plugin_b-.git
 | `/bili_config` | 显示配置子指令提示（当前版本未提供实际子指令，请改面板或业务配置文件） |
 | `/bili_login` | B 站登录（需在服务器终端执行，扫码 / 验证码） |
 | `/bili_kb_list` | 列出知识库分类与条目数量 |
-| `/bili_kb_revisit` | 重温知识库 |
-| `/bili_kb_organize` | 整理知识库分类 |
+| `/bili_kb_revisit` | 提示在独立 CLI 中选择重温内容 |
+| `/bili_kb_organize` | 提示在独立 CLI 中确认整理变更 |
 | `/bili_kb_custom` | 自定义知识管理（交互式，需终端） |
 | `/bili_analyze <BV号/链接>` | 分析单个视频并归档 |
 | `/bili_up_learn <UID或名字>` | 学习 UP 主主页视频（默认取 10 个、跳过无字幕、评分 ≥7） |
@@ -119,14 +119,39 @@ git clone https://github.com/mjy1113451/astrbot_plugin_b-.git
 
 ### 数据存放位置
 
-| 内容 | 位置 |
+**AstrBot 插件模式**通过 `StarTools.get_data_dir("astrbot_plugin_bilibili_learning_bot")` 绑定数据根，通常为 `AstrBot/data/plugin_data/astrbot_plugin_bilibili_learning_bot/`。绑定发生在业务模块导入前；失败时不回退到共享 home 目录。插件模式忽略全局 `BILI_USER_DATA_DIR`，避免混用独立 CLI 或其它实例的账号。
+
+| 内容 | 数据根内的位置 |
 |------|------|
-| 私有数据（`config.json`、`mood_state.json`、`reminders.json`、`qr_codes/`） | `%LOCALAPPDATA%\BiliLearn\Data`（非 Windows 默认 `~/AppData/Local/BiliLearn`，可用环境变量 `BILI_USER_DATA_DIR` 覆盖） |
-| 生成产物（`KnowledgeBase/`、`html_exports/`、`MindMaps/`、`Word/`、`highlights/`） | 源码运行：项目根目录；打包运行：`%LOCALAPPDATA%\BiliLearn` |
+| 业务配置、B站 Cookie、状态与提醒 | `Data/` |
+| 知识库与导出 | `KnowledgeBase/`、`highlights/`、`html_exports/`、`MindMaps/`、`Word/` |
+| 二维码、备份、临时文件与模型缓存 | `qr_codes/`、`backups/`、`temp/`、`cache/`、`models/` |
 
-打包产物不包含任何隐私数据，升级不会覆盖用户数据。
+相对输出路径均基于数据根，保留子目录；插件模式拒绝根目录之外的绝对路径、`..` 和链接越界。安装目录仅用于读取代码及资源，不再保存生成产物。
 
-> 插件不提供 Web 管理后台。仅在生成 HTML 预览时，会在 `127.0.0.1` 上临时启动本地预览服务。
+导入 `core.config` / `cli.app` 只读取已有配置，配置缺失时仅生成内存默认值，不创建用户目录、默认配置或密钥。插件在显式启动学习/分析任务时调用 `initialize_config()`，独立 CLI 在进入主菜单时调用 `initialize_cli()`，才创建所需目录与缺失配置；读取已有配置不会覆盖它。终端编码和 colorama 初始化也只在运行 CLI 时执行，不在导入时修改输出流。嵌入调用者需要持久化初始配置时应显式调用 `core.config.initialize_config()`。
+
+**独立 CLI 模式**仍使用 `%LOCALAPPDATA%\BiliLearn`（非 Windows 默认 `~/AppData/Local/BiliLearn`），也可通过 `BILI_USER_DATA_DIR` 明确选择数据根；仅此模式允许显式指定外部绝对导出路径。如需用 CLI 管理插件同一份数据，应先停止插件任务，再将该变量设为插件数据根。终端菜单不会通过聊天指令调用，即使宿主连接着终端也不会默认确认操作。
+
+### 旧数据迁移与备份
+
+升级前先停止插件及 CLI，并备份旧数据和目标目录。**不会自动扫描 home、源码目录或兄弟项目，不会自动导入 Cookie/API Key，也不会反向复制回安装目录。**
+
+首次使用新数据根前，可在终端明确指定**一个旧数据根**（其内包含 `Data/` 或 `KnowledgeBase/` 等目录），并将 `BILI_USER_DATA_DIR` 设为目标插件数据根：
+
+```bash
+# Git Bash / Linux / macOS 示例；请替换为自己的绝对路径。
+BILI_USER_DATA_DIR="/absolute/AstrBot/data/plugin_data/astrbot_plugin_bilibili_learning_bot" \
+  python main.py --migrate-data "/absolute/old/BiliLearn"
+```
+
+迁移仅复制固定名单内的用户数据；不覆盖已有文件、不跟随链接、不删除源文件。若目标已有账号、配置或密钥文件，整次迁移会拒绝，避免混合不同账号；因此应在首次 `/bili_start` 或其它业务命令创建配置前完成。旧版 home 私有数据与源码产物分属两个根时，请保持原备份，人工核对后将需要的知识库/导出复制到目标对应子目录，**不要合并不同来源的凭据或删除目标配置以绕过保护**。已有目标配置时应人工审阅迁移，不提供自动字段合并。
+
+备份整个数据根时应按敏感文件保护，其中包括 Cookie、API Key 与解密所需密钥；不要上传到 issue 或 PR。二维码只清理本次登录产生的文件，恢复出厂默认保留 `backups/`。
+
+插件日志统一交给 AstrBot logger；异常仅记录类型及文件/行号/函数栈，不记录原响应正文、凭据或局部变量。独立 CLI 保留终端显示。AI 使用异步客户端，短链及 yt-dlp 使用有 I/O 超时/有限重试的线程包装；**取消等待不能强制终止正在运行的下载线程，也不是严格的总耗时上限**。
+
+> 插件不提供 Web 管理后台。仅独立 CLI 支持本地 HTML 预览与打开浏览器；插件模式不会启动预览服务或等待动画。
 
 ---
 
@@ -177,6 +202,17 @@ python -m pip install -r requirements-dev.txt
 python -m unittest discover -s tests -v
 ```
 
+安装完整业务依赖后，可额外运行真实导入冒烟测试（使用临时 profile、假 AstrBot，禁止对外网络及导入阶段写入）：
+
+```bash
+python -B tests/smoke_runtime_imports.py plugin missing
+python -B tests/smoke_runtime_imports.py plugin existing
+python -B tests/smoke_runtime_imports.py standalone missing
+python -B tests/smoke_runtime_imports.py standalone existing
+```
+
+此冒烟脚本不由仅测试依赖的 unittest 自动发现；它还验证显式初始化能正常创建所选 profile，并保持已导入的配置字典引用。
+
 ---
 
 ## FAQ / 排障
@@ -191,10 +227,10 @@ python -m unittest discover -s tests -v
 不是同一问题。先按 traceback 中的插件名和文件路径定位；`astrbot_plugin_biliscroll` 是另一个插件，其 `yt-dlp` 下载错误应单独排查，不能与本插件的内部导入失败混为一谈。
 
 **Q：修复验证到什么范围？**
-测试验证了 namespaced（命名空间）加载及 `sys.path` 不被修改；尚未完成真实 AstrBot 环境配合 B 站账号的端到端（E2E）验证，不代表登录、浏览或互动全链路已实测。
+单元测试使用临时数据及假网络，覆盖插件命名空间、数据根/迁移/链接保护、日志路由和脱敏、AI 资源关闭与取消、短链和下载期间的事件循环心跳。隔离依赖环境验证了真实 CLI/AgentBrain 导入和配置同步，未修改 `sys.path` 或宿主日志等级。尚未完成真实 AstrBot 环境配合 B 站账号及 ASR 模型的端到端（E2E）验证，不代表登录、模型下载、浏览或互动全链路已实测。
 
 **Q：数据存放在哪里？**
-私有数据固定在 `%LOCALAPPDATA%\BiliLearn\Data`（可用 `BILI_USER_DATA_DIR` 覆盖）；知识库与导出产物在源码运行时位于项目根目录，打包运行时同样位于 `BiliLearn` 目录。
+插件模式统一在 AstrBot 的 `data/plugin_data/astrbot_plugin_bilibili_learning_bot/` 下；独立 CLI 使用自己的 `BiliLearn` 数据根或显式 `BILI_USER_DATA_DIR`。知识库、导出和凭据均不再默认写入源码目录。详见“数据存放位置”和“旧数据迁移与备份”。
 
 **Q：启动后立刻退出，日志报 `ImportError`？**
 检查是否使用了干净的 Python 环境。若 `PYTHONPATH` 指向其他 Python 的 site-packages（例如机器上装了多个 Python），可能加载到版本不匹配的 Pillow 等包。运行前执行 `echo $PYTHONPATH`，为空最稳妥。
@@ -228,10 +264,13 @@ API Key、Cookie 等凭据仅保存在本地，请勿公开分享。
 
 - Version is defined in `metadata.yaml` (`version`) and mirrored by `PLUGIN_VERSION` in `main.py`; MIT license, requires AstrBot `>=4.29.1,<5`.
 - Commands: `/bili_start`, `/bili_stop`, `/bili_status`, `/bili_analyze`, `/bili_up_learn`, `/bili_video2html`, `/bili_kb_*`, `/bili_asr`, `/bili_quiet`, `/bili_vision`, `/bili_fast`, `/bili_interest`, `/bili_comment`, `/bili_export`, `/bili_import`, `/bili_reset`, `/bili_login`.
-- Private data lives in `%LOCALAPPDATA%\BiliLearn\Data` (override with `BILI_USER_DATA_DIR`).
+- In plugin mode, all private data and generated artifacts live below AstrBot's `data/plugin_data/astrbot_plugin_bilibili_learning_bot/`, obtained via `StarTools`; global `BILI_USER_DATA_DIR` is ignored. Standalone CLI keeps its own `%LOCALAPPDATA%\BiliLearn` profile (or explicit `BILI_USER_DATA_DIR`). Relative export paths stay inside that profile.
+- Importing `core.config` / `cli.app` is read-only: missing profiles use in-memory defaults without creating directories, config files or cipher keys. Plugin learning/analysis commands explicitly initialize their profile; standalone CLI initializes at menu startup. Embedding callers can invoke `core.config.initialize_config()` explicitly. Terminal setup also runs only when the CLI is used, not when imported.
+- Legacy data is never discovered or imported automatically. Before initializing a new target, stop all workers, back up both locations, explicitly set `BILI_USER_DATA_DIR` to the target and run `python main.py --migrate-data /absolute/legacy/root`. Only allowlisted data is copied, without overwriting, following links or deleting the source. An existing account/config/key in the target rejects the migration; do not merge unrelated credentials.
+- Plugin diagnostics use AstrBot's logger without terminal animation, interactive menus or browser/preview-server startup. AI calls are asynchronous; short-link and download operations run in threads with finite I/O timeouts/retries. Cancelling their await does not terminate an already-running thread or enforce a hard total deadline.
 - Plugin panel settings take effect only when `use_astrbot_config` is enabled and the relevant groups are listed in `apply_sections`.
 - For installation dependency conflicts, verify that `metadata.yaml` and `main.py` report the same version as the installed package and that `requirements.txt` does not redeclare core-provided packages.
-- Install the complete source from the latest `main` containing the issue #39 fix; verify marketplace packages include it too. Back up private configuration, credentials and user data before updating or reinstalling; **do not delete data directories**.
+- Install the complete source from the latest `main` containing the issue #39 / #41 fixes; verify marketplace packages include them too. Back up private configuration, credentials and user data before updating or reinstalling; **do not delete data directories**.
 
 ### FAQ / Troubleshooting
 
@@ -245,4 +284,4 @@ No. In the **actual installation directory** identified by the logs, compare `ma
 No. Check the plugin name and file paths in the traceback. `astrbot_plugin_biliscroll` is a different plugin; investigate its `yt-dlp` download errors separately from this plugin's internal import failure.
 
 **Q: What has been verified?**
-Tests verify namespaced loading and that `sys.path` is unchanged. Real AstrBot plus Bilibili-account end-to-end (E2E) testing has **not** been completed; login, browsing and interactions are not claimed to be validated end to end.
+Temporary-data and fake-network tests cover namespaced loading, profile/migration/link boundaries, logger routing/redaction, async cleanup/cancellation and event-loop progress during requests/downloads. A separate real-dependency import smoke checks CLI/AgentBrain loading and configuration sync without changing `sys.path` or host log levels. Real AstrBot plus Bilibili-account/ASR-model end-to-end (E2E) testing has **not** been completed; login, model downloads, browsing and interactions are not claimed to be validated end to end.

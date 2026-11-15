@@ -13,7 +13,7 @@ from io import BytesIO
 from pathlib import Path
 
 import httpx
-from openai import OpenAI
+from openai import AsyncOpenAI, OpenAI
 from colorama import Fore, Style
 from bilibili_api import Credential, user, homepage, comment, video, Danmaku, favorite_list
 from bilibili_api.comment import CommentResourceType

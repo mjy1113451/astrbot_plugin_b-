@@ -1,5 +1,6 @@
 """brain/_brain_init.py — AgentBrain 初始化 & 预取 mixin"""
 from ._mixin_imports import *
+from ..utils.display import log_exception
 
 class BrainInitMixin:
     """AgentBrain __init__ & prefetch"""
@@ -61,7 +62,7 @@ class BrainInitMixin:
                 modular_settings = load_modular_settings()
                 self.video_understander = VideoUnderstanding(modular_settings, ModelClient(modular_settings, BotState()))
             except Exception as e:
-                log(f"视频理解模块初始化失败，将退回字幕模式: {e}", "WARN")
+                log_exception("视频理解模块初始化失败，将退回字幕模式", e)
 
         self.kb_search = None
         if KBSearchEngine and ModelClient and load_modular_settings and BotState:
@@ -69,7 +70,7 @@ class BrainInitMixin:
                 modular_settings = load_modular_settings()
                 self.kb_search = KBSearchEngine(ModelClient(modular_settings, BotState()))
             except Exception as e:
-                log(f"向量检索引擎初始化失败: {e}", "WARN")
+                log_exception("向量检索引擎初始化失败", e)
 
         self.cookies = None
         self.credential = None
@@ -143,7 +144,7 @@ class BrainInitMixin:
             )
 
             if not status.online:
-                log(f"[OB] ⚠️ 无法连接，降级为原有推荐流: {status.error}", "WARN")
+                log("[OB] 无法连接，降级为原有推荐流", "WARN")
                 self.ob_enabled = False
                 self.ob_ready = False
                 return
@@ -183,7 +184,7 @@ class BrainInitMixin:
             log("[OB] ob_bridge 模块未安装", "WARN")
             self.ob_enabled = False
         except Exception as e:
-            log(f"[OB] 初始化异常: {e}", "WARN")
+            log_exception("[OB] 初始化异常", e)
             self.ob_enabled = False
 
     async def _prefetch_recommendations(self):
@@ -407,7 +408,7 @@ class BrainInitMixin:
         except ImportError:
             pass
         except Exception as e:
-            log(f"[OB] 知识盲区同步失败: {e}", "DEBUG")
+            log_exception("[OB] 知识盲区同步失败", e)
 
     async def _inject_curiosity_from_diary(self, diary_entry: dict):
         """日记生成后，提取知识生长点注入 OB 好奇心关键词"""
@@ -427,7 +428,7 @@ class BrainInitMixin:
         except ImportError:
             pass
         except Exception as e:
-            log(f"[OB] 好奇心注入异常: {e}", "DEBUG")
+            log_exception("[OB] 好奇心注入异常", e)
 
     async def _apply_strategy_to_ob(self, evolution_result: dict):
         """进化后，解析新策略并应用到 OB"""
@@ -446,7 +447,7 @@ class BrainInitMixin:
         except ImportError:
             pass
         except Exception as e:
-            log(f"[OB] 策略同步异常: {e}", "DEBUG")
+            log_exception("[OB] 策略同步异常", e)
 
     async def _apply_strategy_to_ob_v2(self, evolution_result: dict, ab_context: str = ""):
         """Phase 4: 进化策略 → OB 参数联动（含 ε 变化、兴趣偏移、AB上下文）"""
@@ -466,7 +467,7 @@ class BrainInitMixin:
         except ImportError:
             pass
         except Exception as e:
-            log(f"[OB] 进化联动异常: {e}", "DEBUG")
+            log_exception("[OB] 进化联动异常", e)
 
     # ── Phase 4: 审计 & AB 对比 ──
 

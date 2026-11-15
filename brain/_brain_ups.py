@@ -1,5 +1,6 @@
 """brain/_brain_ups.py — AgentBrain UP主管理 mixin"""
 from ._mixin_imports import *
+from ..utils.display import log_exception
 from ..api.throttle import _bili_throttle
 
 class BrainUpsMixin:
@@ -138,5 +139,5 @@ class BrainUpsMixin:
                     log(f"🔍 搜索解析 UP主: {up_name} → UID: {uid}", "RESOLVE")
                     return uid
         except Exception as e:
-            log(f"搜索UP主 {up_name} 失败: {e}", "WARN")
+            log_exception("搜索UP主失败", e)
         return None

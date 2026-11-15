@@ -23,7 +23,9 @@ from bilibili_api import session as bili_session
 from bilibili_api import video as bili_video
 from .comment import CommentInteractionManager, _reply_comment_like_probability
 from .private_msg import PrivateMessageManager
-from ..utils.display import log
+from .. import _runtime
+from ..utils.display import log, log_exception
+from ..core.user_data import managed_file_path
 from ..utils.lock import _acquire_bot_lock, _release_bot_lock
 
 # 监听配置
@@ -96,7 +98,7 @@ def save_monitor_config(cfg):
         os.replace(tmp, MONITOR_CONFIG_FILE)
         return True
     except Exception as e:
-        log(f"保存监听配置失败: {e}", "ERROR")
+        log_exception("保存监听配置失败", e)
         return False
 
 
@@ -188,12 +190,12 @@ class MonitorBot:
             return False
 
         try:
-            with open(COOKIE_FILE, 'r', encoding='utf-8') as f:
+            with managed_file_path(COOKIE_FILE).open('r', encoding='utf-8') as f:
                 cookies = json.load(f)
             self.uid = int(cookies.get("DedeUserID", 0))
             self.bili.uid = self.uid
         except Exception as e:
-            log(f"加载Cookie失败: {e}", "ERROR")
+            log_exception("加载B站凭据失败", e)
             return False
 
         log(f"监听模式登录就绪 (UID: {self.uid})", "SUCCESS")
@@ -265,7 +267,7 @@ class MonitorBot:
         except KeyboardInterrupt:
             log("📡 监听模式被中断", "INFO")
         except Exception as e:
-            log(f"监听主循环异常: {e}", "ERROR")
+            log_exception("监听主循环异常", e)
             self.stats["errors"] += 1
         finally:
             self.running = False
@@ -520,7 +522,7 @@ class MonitorBot:
         except Exception as exc:
             self._back_off_after_rate_limit("mentions", exc)
             self.stats["errors"] += 1
-            log(f"mention check failed: {exc}", "WARN")
+            log_exception("mention check failed", exc)
             return 0
 
     async def _check_comment_channels(self):
@@ -563,7 +565,7 @@ class MonitorBot:
             return processed
         except Exception as e:
             self._back_off_after_rate_limit("comments", e)
-            log(f"[监听] 评论检查失败: {e}", "ERROR")
+            log_exception("[监听] 评论检查失败", e)
             self.stats["errors"] += 1
             return 0
 
@@ -588,15 +590,12 @@ class MonitorBot:
             if "curl: (28)" in error_text or "timed out" in error_text.lower():
                 log(
                     f"[监听][私信] 拉取超时 elapsed={elapsed:.1f}s；本轮跳过，"
-                    f"将在 {self.cfg.get('private_msg_check_interval', 5)}s 后继续检查。"
-                    f"底层错误: {error_text[:180]}",
+                    f"将在 {self.cfg.get('private_msg_check_interval', 5)}s 后继续检查。",
                     "WARN",
                 )
             else:
-                log(
-                    f"[监听][私信] 检查失败 elapsed={elapsed:.1f}s: {error_text[:240]}",
-                    "ERROR",
-                )
+                log(f"[监听][私信] 检查失败 elapsed={elapsed:.1f}s", "ERROR")
+            log_exception("[监听][私信] 检查失败", e)
             self.stats["errors"] += 1
             return 0
 
@@ -664,6 +663,9 @@ async def main():
 
 def configure_monitor_cli():
     """Edit monitor settings or start monitor mode from the command-line menu."""
+    if _runtime.plugin_mode:
+        log("插件模式不提供交互式监听设置", "WARN")
+        return
     cfg = load_monitor_config()
     while True:
         print(f"\n{Fore.CYAN}{'=' * 52}{Style.RESET_ALL}")
@@ -710,7 +712,7 @@ def configure_monitor_cli():
             print(f"{Fore.GREEN}监听配置已保存。{Style.RESET_ALL}")
 
 
-if __name__ == "__main__":
+if __name__ == "__main__" and not _runtime.plugin_mode:
     print(f"{Fore.CYAN}{'='*60}{Style.RESET_ALL}")
     print(f"{Fore.CYAN}  📡 实时监听模式{Style.RESET_ALL}")
     print(f"{Fore.CYAN}  不刷视频 · 专盯私信+评论 · 实时AI回复{Style.RESET_ALL}")
@@ -721,8 +723,6 @@ if __name__ == "__main__":
     except KeyboardInterrupt:
         print(f"\n{Fore.YELLOW}📡 监听模式已中断{Style.RESET_ALL}")
     except Exception as e:
-        print(f"{Fore.RED}[ERROR] 监听异常: {e}{Style.RESET_ALL}")
-        import traceback
-        traceback.print_exc()
+        log_exception("监听异常", e)
     finally:
         _release_bot_lock()

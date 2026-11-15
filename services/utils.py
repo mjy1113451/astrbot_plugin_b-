@@ -12,9 +12,7 @@ from bilibili_api.comment import CommentResourceType
 from ..core.config import INTERESTS_FILE, COOKIE_FILE
 from ..core.user_data import DATA_DIR
 
-# Log function for standalone use (mirrors start_cli.log)
-def _log(msg, level="INFO"):
-    print(f"[{level}] {msg}")
+from ..utils.display import log as _log
 
 
 class InterestManager:

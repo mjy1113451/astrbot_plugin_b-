@@ -14,6 +14,8 @@ from bilibili_api import comment
 from colorama import Fore, Style
 
 from ._mixin_imports import *
+from .. import _runtime
+from ..utils.display import log_exception
 from ..utils.helpers import _mask_urls
 from ..utils.helpers import _safe_task_callback
 from ..api.throttle import _bili_throttle
@@ -55,7 +57,7 @@ async def select_candidate_video(brain, items):
         interest_engine = InterestEngine()
         interests = [str(item).strip() for item in interest_engine.get_keywords() if str(item).strip()]
     except Exception as exc:
-        log(f"候选筛选兴趣引擎不可用，回退旧兴趣列表: {exc}", "WARN")
+        log_exception("候选筛选兴趣引擎不可用，回退旧兴趣列表", exc)
         interests = brain.interest_mgr.get_interests() or []
     if not pool:
         log("候选筛选：推荐流中没有可用 BV 视频", "CANDIDATE")
@@ -114,7 +116,7 @@ async def select_candidate_video(brain, items):
                 return selected
             log(f"AI 返回的 {match.group(0)} 不在候选池，改用本地筛选", "WARN")
     except Exception as exc:
-        log(f"候选视频 AI 筛选不可用，使用本地兜底: {exc}", "WARN")
+        log_exception("候选视频 AI 筛选不可用，使用本地兜底", exc)
     selected = random.choice(matched)
     log(f"本地兴趣匹配选择：{selected['bvid']}《{selected.get('title', '无标题')}》", "CANDIDATE")
     return selected
@@ -148,7 +150,7 @@ class BrainLoopMixin:
         except ImportError:
             interests_new = []
         except Exception as e:
-            log(f"兴趣引擎加载异常: {e}", "WARN")
+            log_exception("兴趣引擎加载异常", e)
             interests_new = []
         all_interests = list(dict.fromkeys(interests_old + interests_new))
         if all_interests:
@@ -157,8 +159,11 @@ class BrainLoopMixin:
             log("兴趣列表为空，将对所有视频感兴趣", "INTEREST")
         log(f"当前人格: {self.persona_mgr.get_active_persona()} | 当前心情: {self.mood_mgr.get_current()}", "INFO")
         
-        print(f"\n{Fore.CYAN}知识库分类系统已初始化:{Style.RESET_ALL}")
-        self.classifier.show_category_structure()
+        if _runtime.plugin_mode:
+            log("知识库分类系统已初始化", "KB")
+        else:
+            print(f"\n{Fore.CYAN}知识库分类系统已初始化:{Style.RESET_ALL}")
+            self.classifier.show_category_structure()
         # 启动时清理空文件夹
         cleaned = self.classifier.cleanup_empty_folders()
         if cleaned > 0:
@@ -185,7 +190,8 @@ class BrainLoopMixin:
         log(f"评论互动: {'已启用' if COMMENT_CHECK_ENABLED else '⏸️ 已关闭'} | 检查间隔: {COMMENT_CHECK_INTERVAL}秒", "COMMENT")
         log(f"私信互动: {'已启用' if PRIVATE_MESSAGE_ENABLED else '⏸️ 已关闭'} | {'自动发送' if PRIVATE_MESSAGE_AUTO_REPLY else '仅拟不发送'} | 检查间隔: {PRIVATE_MESSAGE_CHECK_INTERVAL}秒", "DM")
         log(f"日记: {'自动' if DIARY_ENABLED and DIARY_AUTO_ENABLED else '手动/关闭'} | 自我进化: {'自动应用' if EVOLUTION_ENABLED and EVOLUTION_AUTO_ENABLED and EVOLUTION_AUTO_APPLY else '手动/仅记录'}", "EVOLVE")
-        print("="*80)
+        if not _runtime.plugin_mode:
+            print("="*80)
 
         # ── 智能省token模式（实时读取 config，避免 import * 缓存）──
         _smart_token = bool(config.get("system", {}).get("smart_token_mode", False))
@@ -209,7 +215,7 @@ class BrainLoopMixin:
                 )
                 log("🍪 Cookie预热完成", "SUCCESS")
             except Exception as e:
-                log(f"Cookie预热跳过: {e}", "INFO")
+                log_exception("Cookie预热跳过", e)
 
         # [WARN] 启动冷却：等待几秒再进入扫描循环，模拟真人打开App后的浏览节奏
         try:
@@ -321,7 +327,7 @@ class BrainLoopMixin:
                                             watched_count = item.get("result", {}).get("count", 0)
                                     log(f"🤖 Agent深度搜索完成: {ok_steps}/{len(run.get('results', []))}步骤, 看了{watched_count}个视频", "SUCCESS")
                                 except Exception as e:
-                                    log(f"🤖 Agent深度搜索异常: {e}", "WARN")
+                                    log_exception("Agent深度搜索异常", e)
                             task = asyncio.create_task(_dive_async())
                             task.add_done_callback(_safe_task_callback("agent_dive_async"))
 
@@ -338,7 +344,7 @@ class BrainLoopMixin:
                                 if cleaned > 0:
                                     log(f"[KB] 已清理 {cleaned} 个空文件夹", "KB")
                         except Exception as e:
-                            log(f"[KB] 自动重分类异常: {e}", "ERROR")
+                            log_exception("[KB] 自动重分类异常", e)
 
                 # ── [SPEED] 并行：回顾复习 + 主动聊天，互不依赖 ──
                 revisit_target = None
@@ -375,14 +381,14 @@ class BrainLoopMixin:
                         else:
                             log(f"获取复习视频信息失败，跳过", "WARN")
                     except Exception as e:
-                        log(f"回顾复习异常: {e}", "WARN")
+                        log_exception("回顾复习异常", e)
                     return None
 
                 async def _do_chat():
                     try:
                         await self.maybe_initiate_chat()
                     except Exception as e:
-                        log(f"主动聊天模块异常(主循环): {e}", "ERROR")
+                        log_exception("主动聊天模块异常(主循环)", e)
 
                 revisit_target, _ = await asyncio.gather(_do_revisit(), _do_chat(), return_exceptions=True)
                 if isinstance(revisit_target, Exception):
@@ -435,7 +441,7 @@ class BrainLoopMixin:
                                     idx = rec_modes.index(self._last_recommend_mode)
                                     rec_modes = rec_modes[idx+1:] + rec_modes[:idx+1]
                                 except ValueError as e:
-                                    log(f'值错误: {e}', 'DEBUG')
+                                    log_exception("推荐值解析失败", e)
                             for mode in rec_modes[:2]:  # 尝试2种模式
                                 try:
                                     queries = await self.recommend_engine.generate_search_queries(mode=mode, count=2)
@@ -462,7 +468,7 @@ class BrainLoopMixin:
                                                 log(f"  → 推荐理由: {chosen['_rec_reason'][:80]}...", "RECOMMEND")
                                                 break
                                 except Exception as e:
-                                    log(f"推荐生成失败({mode}): {e}", "WARN")
+                                    log_exception("推荐生成失败", e)
                         
                         if rec_target and rec_target.get("bvid"):
                             target = rec_target
@@ -675,10 +681,10 @@ class BrainLoopMixin:
                             )
                         except Exception:
                             self.update_video_observation("字幕读取完成", subtitle_available=False, subtitle_total=0)
-                        log(f"视频理解GET: {subtitle_text[:80].strip()}...", "SUCCESS")
+                        log(f"视频理解完成 ({len(subtitle_text)}字)", "SUCCESS")
                     else:
                         subtitle_text = "[无可用字幕/语音内容]"
-                        log(f"视频理解遇到问题: {result}", "WARN")
+                        log("视频理解未取得可用内容", "WARN")
 
                 async def _read_comments_task():
                     nonlocal comment_text, c_list, danmaku_text
@@ -753,10 +759,9 @@ class BrainLoopMixin:
                         visual_score=vis_score,
                     )
                     if used_local_fallback:
-                        preview = _mask_urls((raw or "<空响应>")[:160].replace("\n", " "))
-                        log(f"AI决策格式不可解析，已按内容质量本地评分 | 返回片段: {preview}", "WARN")
+                        log("AI决策格式不可解析，已按内容质量本地评分", "WARN")
                 except Exception as e:
-                    log(f"AI决策不可用，转为本地内容评分: {_mask_urls(str(e)[:160])}", "WARN")
+                    log_exception("AI决策不可用，转为本地内容评分", e)
                     decision, _ = parse_video_decision(
                         "",
                         title=title,
@@ -814,7 +819,7 @@ class BrainLoopMixin:
                         folder_name = local_favorite.get("folder", {}).get("name", "AI 精选")
                         log(f"[LOCAL_FAVORITE] 已加入本地收藏夹“{folder_name}”: 《{title}》", "SUCCESS")
                 except Exception as local_favorite_error:
-                    log(f"[LOCAL_FAVORITE] 本地收藏写入失败: {local_favorite_error}", "WARN")
+                    log_exception("本地收藏写入失败", local_favorite_error)
                 self.user_profile_mgr.update_impression(f"up::{up}", up, thought)
 
                 # [*] 记录UP主印象 + 决定是否关注
@@ -890,7 +895,7 @@ class BrainLoopMixin:
                                 if comment_summ:
                                     log("评论区知识已提炼，将合并到归档", "LEARN")
                             except Exception as clearn_e:
-                                log(f"评论区知识收集异常: {clearn_e}", "WARN")
+                                log_exception("评论区知识收集异常", clearn_e)
                         # 归档（评论摘要合并写入视频笔记）
                         learn_success = await self.learn_from_video(
                             bvid, title, up, video_url, learn_text, learning_topic,
@@ -902,7 +907,7 @@ class BrainLoopMixin:
                                 self.energy -= 2
                                 log(f"学习归档消耗2点精力，当前剩余精力: {self.energy}%", "INFO")
                     except Exception as learn_e:
-                        log(f"学习归档异常: {learn_e}", "WARN")
+                        log_exception("学习归档异常", learn_e)
 
                 # ★ 评论区知识收集：从讨论中提取有价值的信息
                 if (not comment_knowledge_processed and c_list and len(c_list) >= 3
@@ -918,7 +923,7 @@ class BrainLoopMixin:
                         else:
                             log(f"评论知识跳过: {reason2}", "DEBUG")
                     except Exception as clearn_e:
-                        log(f"评论区知识收集异常: {clearn_e}", "WARN")
+                        log_exception("评论区知识收集异常", clearn_e)
 
                 if score < INTEREST_THRESHOLD:
                     if learn_success:
@@ -1076,11 +1081,11 @@ class BrainLoopMixin:
                             elif share_result["status"] == "queued":
                                 log(f"[Owner share] Queued for review: {title}", "INFO")
                             elif share_result["status"] == "failed":
-                                log(f"[Owner share] Platform send failed: {share_result.get('reason', 'unknown')}", "WARN")
+                                log("[Owner share] Platform send failed", "WARN")
                             else:
-                                log(f"[Owner share] Skipped: {share_result.get('reason', 'not triggered')}", "DEBUG")
+                                log("[Owner share] Skipped", "DEBUG")
                         except Exception as share_error:
-                            log(f"[Owner share] Share failed without affecting learning: {share_error}", "WARN")
+                            log_exception("[Owner share] Share failed without affecting learning", share_error)
                     action_log.append("学习归档")
                     # 异步非阻塞：后台Agent继续探索
                     self.last_agent_run_at = datetime.now()
@@ -1157,7 +1162,7 @@ class BrainLoopMixin:
                         else:
                             log("视频已经点过赞了。", "INFO")
                     except Exception as e:
-                        log(f"点赞失败 (可能受限): {e}", "ERROR")
+                        log_exception("点赞失败 (可能受限)", e)
 
                 if do_fav:
                     from ..services.like_review import ActionReviewInbox, requires_review
@@ -1199,7 +1204,7 @@ class BrainLoopMixin:
                         else:
                             log("视频已在收藏夹中。", "INFO")
                     except Exception as e:
-                        log(f"收藏失败: {e}", "ERROR")
+                        log_exception("收藏失败", e)
 
                 if do_coin:
                     from ..services.like_review import ActionReviewInbox, requires_review
@@ -1233,7 +1238,7 @@ class BrainLoopMixin:
                             )
                         self.user_profile_mgr.adjust_affinity(f"up::{up}", up, 3, "投币支持")
                     except Exception as e:
-                        log(f"投币失败: {e}", "ERROR")
+                        log_exception("投币失败", e)
 
                 # 回复他人评论的功能
                 if do_replies and PROB_COMMENT_OTHERS > 0 and public_commenting_enabled():
@@ -1288,7 +1293,7 @@ class BrainLoopMixin:
                                 
                                 await asyncio.sleep(random.uniform(1, 3))
                         except Exception as e:
-                            log(f"回复评论失败: {e}", "ERROR")
+                            log_exception("回复评论失败", e)
 
                 if action_log:
                     self.energy -= 3
@@ -1374,9 +1379,9 @@ class BrainLoopMixin:
                             if suggestions:
                                 engine.apply_ai_suggestions(suggestions)
                         except Exception as ai_sugg_e:
-                            log(f"AI兴趣建议解析异常(非致命): {str(ai_sugg_e)[:120]}", "DEBUG")
+                            log_exception("AI兴趣建议解析异常(非致命)", ai_sugg_e)
                 except Exception as engine_e:
-                    log(f"兴趣引擎追踪异常(非致命): {str(engine_e)[:120]}", "DEBUG")
+                    log_exception("兴趣引擎追踪异常(非致命)", engine_e)
 
                 # 📚 知识库定期审查：每N个视频后随机抽查归档质量
                 if KNOWLEDGE_REVIEW_INTERVAL > 0 and not _smart_token:
@@ -1386,7 +1391,7 @@ class BrainLoopMixin:
                         try:
                             await self._review_knowledge_periodically()
                         except Exception as review_e:
-                            log(f"知识库定期审查异常: {review_e}", "WARN")
+                            log_exception("知识库定期审查异常", review_e)
 
             except asyncio.CancelledError:
                 log("主循环被取消 (CancelledError)，正常退出", "WARN")
@@ -1395,9 +1400,7 @@ class BrainLoopMixin:
                 log("主循环收到中断信号，正常退出", "WARN")
                 raise
             except Exception as e:
-                log(f"主循环发生严重错误: {e}", "ERROR")
-                import traceback
-                traceback.print_exc()
+                log_exception("主循环发生严重错误", e)
                 await asyncio.sleep(3)
 
         return completion_action

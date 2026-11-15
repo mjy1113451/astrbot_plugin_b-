@@ -3,10 +3,73 @@ from colorama import Fore, Style
 import re
 import sys
 
-_SENSITIVE = re.compile(r"(?i)(SESSDATA|bili_jct|DedeUserID|access_token|refresh_token|api[_ -]?key|authorization|password)(\s*:\s*Bearer\s+|\s*[=:]\s*[\"']?|\s+Bearer\s+)([^,\s\"'};]+)")
+from .. import _runtime
+
+
+_ANSI = re.compile(
+    r"\x1b(?:\[[0-?]*[ -/]*[@-~]|\][^\x07\x1b]*(?:\x07|\x1b\\)|[@-_])"
+    r"|\x9b[0-?]*[ -/]*[@-~]"
+)
+_CONTROL = re.compile(r"[\x00-\x08\x0b-\x1f\x7f-\x9f]")
+_SENSITIVE_LABEL = re.compile(
+    r"(?i)(?<![\w-])(?P<label>[\"']?(?:[a-z0-9]+[_ -])*"
+    r"(?:api[_ -]?key|access[_ -]?token|refresh[_ -]?token|client[_ -]?secret|"
+    r"secret(?:[_ -]?key)?|password|passwd|pwd|sessdata|bili[_ -]?jct|dedeuserid|"
+    r"(?:set[_ -]?)?cookies?|authorization|proxy[_ -]?(?:authorization|auth|"
+    r"password|user(?:name)?)|auth(?:[_ -]?token)?|key|token|recovery[_ -]?(?:code|answer))"
+    r"[\"']?)(?:[ \t]*[:=][ \t]*|[ \t]+(?=(?:Bearer|Basic)\b))"
+)
+_URL_AUTH = re.compile(r"(?i)(\b[a-z][a-z0-9+.-]*://)[^/\s@\"'<>]+@")
+_AUTH_TOKEN = re.compile(r"(?i)\b(Bearer|Basic)[ \t]+[^\s,;\"'<>}\]]+")
+
+
+def _secret_value_end(text, start):
+    """Skip one quoted/container value, or the whole unquoted header line."""
+    closing = {"{": "}", "[": "]", "(": ")"}
+    stack = []
+    quote = None
+    escaped = False
+    for index in range(start, len(text)):
+        char = text[index]
+        if quote:
+            if escaped:
+                escaped = False
+            elif char == "\\":
+                escaped = True
+            elif char == quote:
+                quote = None
+                if not stack:
+                    return index + 1
+        elif char in "\"'":
+            quote = char
+        elif char in closing:
+            stack.append(closing[char])
+        elif stack and char == stack[-1]:
+            stack.pop()
+            if not stack:
+                return index + 1
+        elif not stack and char in "\r\n":
+            return index
+    return len(text)
+
 
 def redact_sensitive_text(value):
-    return _SENSITIVE.sub(lambda m: f"{m.group(1)}{m.group(2)}***", str(value or ""))
+    """Redact credential labels (including JSON), complete headers and URL auth."""
+    text = _CONTROL.sub("", _ANSI.sub("", str(value) if value is not None else ""))
+    parts = []
+    cursor = 0
+    for match in _SENSITIVE_LABEL.finditer(text):
+        if match.start() < cursor:
+            continue
+        start = match.end()
+        end = _secret_value_end(text, start)
+        parts.append(text[cursor:start])
+        quote = text[start:start + 1]
+        parts.append(f"{quote}***{quote}" if quote in ("\"", "'") else "***")
+        cursor = end
+    parts.append(text[cursor:])
+    text = _URL_AUTH.sub(r"\1***@", "".join(parts))
+    return _AUTH_TOKEN.sub(r"\1 ***", text)
 
 
 def mask_secret(value):
@@ -18,13 +81,27 @@ def mask_secret(value):
 
 
 def log(msg, level="INFO"):
-    # 安静模式：隐藏INFO/SCAN/DM级别的例行输出
-    try:
-        from ..core.globals import QUIET_MODE as _quiet
-        if _quiet and level in ("INFO", "SCAN", "DM"):
-            return
-    except ImportError:
-        pass
+    """Use the host logger in plugin mode, and retain the standalone terminal."""
+    level = str(level).upper()
+    # Only inspect this installation's already-loaded config; never initialize data.
+    package = __package__.rsplit(".", 1)[0]
+    loaded_config = sys.modules.get(f"{package}.core.config")
+    cfg = vars(loaded_config).get("config") if loaded_config is not None else None
+    system = cfg.get("system") if isinstance(cfg, dict) else None
+    if isinstance(system, dict) and system.get("quiet_mode", False) and level in ("INFO", "SCAN", "DM"):
+        return
+    message = redact_sensitive_text(msg)
+    if _runtime.plugin_mode:
+        from astrbot.api import logger
+
+        method = {
+            "DEBUG": "debug", "DIAG": "debug", "TRACE": "debug",
+            "WARN": "warning", "WARNING": "warning",
+            "ERR": "error", "ERROR": "error",
+            "CRITICAL": "critical", "FATAL": "critical",
+        }.get(level, "info")
+        getattr(logger, method)(f"[{level}] {message}")
+        return
     colors = {
         "INFO": Fore.WHITE, "SUCCESS": Fore.GREEN, "WARN": Fore.YELLOW, "ERROR": Fore.RED,
         "SCAN": Fore.CYAN, "EYE": Fore.MAGENTA, "BRAIN": Fore.BLUE, "ACT": Fore.GREEN,
@@ -44,7 +121,7 @@ def log(msg, level="INFO"):
     icon = icons.get(level, '[INFO]')
 
     # [FIX] Windows GBK终端无法打印emoji，用ASCII标签替代
-    text = f"{icon} [{level:<7}] {redact_sensitive_text(msg)}"
+    text = f"{icon} [{level:<7}] {message}"
     try:
         print(f"{color}{text}{Style.RESET_ALL}")
     except UnicodeEncodeError:
@@ -56,3 +133,20 @@ def log(msg, level="INFO"):
             print(safe_text)
         except UnicodeEncodeError:
             sys.stdout.buffer.write((safe_text + "\n").encode(encoding, errors="replace"))
+
+
+def log_exception(action, exc):
+    """Log a diagnostic stack without exception text, responses, source or locals.
+
+    Use the exception's own traceback so task done-callbacks work outside except.
+    Do not use logger.exception/format_exception: both can expose API credentials.
+    """
+    lines = [f"{action}: {type(exc).__name__}"]
+    tb = exc.__traceback__
+    while tb is not None:
+        code = tb.tb_frame.f_code
+        # Full paths may contain user names or credentials; only identify the file.
+        filename = code.co_filename.replace("\\", "/").rsplit("/", 1)[-1]
+        lines.append(f"  at {filename}:{tb.tb_lineno} in {code.co_name}")
+        tb = tb.tb_next
+    log("\n".join(lines), "ERROR")

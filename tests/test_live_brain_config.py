@@ -1,13 +1,14 @@
 """Regression coverage for live model and video-frame configuration."""
 import ast
 import asyncio
+import importlib.util
 import json
 import os
 from pathlib import Path
 import sys
 from types import ModuleType, SimpleNamespace
 import unittest
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -54,19 +55,38 @@ class LiveConfigurationTests(unittest.TestCase):
         package.__path__ = [str(ROOT)]
         package.__package__ = PACKAGE
         core = ModuleType(f"{PACKAGE}.core")
-        core.__path__ = [str(ROOT / "core")]
+        core.__path__ = []  # Never import real configuration or user-data modules.
         config_module = ModuleType(f"{PACKAGE}.core.config")
         config_module.config = self.cfg
+        brain_package = ModuleType(f"{PACKAGE}.brain")
+        brain_package.__path__ = []
+        mixins = ModuleType(f"{PACKAGE}.brain._mixin_imports")
+        mixins.os = os
+        mixins.config = self.cfg
+        mixins.AsyncOpenAI = Mock(side_effect=AssertionError("Live config must not create an AI client"))
+        mixins.__all__ = ["os", "config", "AsyncOpenAI"]
+        spec = importlib.util.spec_from_file_location(
+            f"{PACKAGE}.brain._brain_ai", ROOT / "brain" / "_brain_ai.py"
+        )
+        ai = importlib.util.module_from_spec(spec)
         package.core = core
+        package.brain = brain_package
         core.config = config_module
+        brain_package._mixin_imports = mixins
+        brain_package._brain_ai = ai
         self.modules = patch.dict(sys.modules, {PACKAGE: package,
                                                 core.__name__: core,
-                                                config_module.__name__: config_module})
+                                                config_module.__name__: config_module,
+                                                brain_package.__name__: brain_package,
+                                                mixins.__name__: mixins,
+                                                ai.__name__: ai})
         self.modules.start()
         self.addCleanup(self.modules.stop)
-        live_config = extract_function("_brain_ai.py", "_live_config", {"os": os})
-        self.brain = SimpleNamespace()
-        self.brain._live_config = lambda: live_config(self.brain)
+        self.addCleanup(mixins.AsyncOpenAI.assert_not_called)
+        self.addCleanup(self.assertNotIn, f"{PACKAGE}.core.user_data", sys.modules)
+        with patch.object(sys, "dont_write_bytecode", True):
+            spec.loader.exec_module(ai)
+        self.brain = ai.BrainAIMixin()
 
     def test_all_scoped_model_arguments_are_live(self):
         for name, expected in {**MIXINS, "video_analysis.py": 9}.items():

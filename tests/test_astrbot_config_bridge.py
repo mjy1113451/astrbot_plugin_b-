@@ -2,8 +2,11 @@
 
 Run with: python -m unittest discover -s tests -p test_astrbot_config_bridge.py
 """
+import builtins
+from contextlib import ExitStack
 import copy
 import importlib
+import io
 import json
 import os
 from pathlib import Path
@@ -11,7 +14,7 @@ import sys
 import tempfile
 from types import ModuleType, SimpleNamespace
 import unittest
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -22,7 +25,7 @@ class AstrBotConfigBridgeTests(unittest.TestCase):
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory()
         self.addCleanup(self.temp.cleanup)
-        root = Path(self.temp.name)
+        root = Path(self.temp.name).resolve()
         data = root / "Data"
         data.mkdir()
         kb = root / "KnowledgeBase"
@@ -54,7 +57,32 @@ class AstrBotConfigBridgeTests(unittest.TestCase):
         user_data.MINDMAPS_DIR = root / "MindMaps"
         user_data.WORD_DIR = root / "Word"
         user_data.QR_CODES_DIR = root / "qr_codes"
+        user_data.BACKUPS_DIR = root / "backups"
+        user_data.TEMP_DIR = root / "temp"
+        user_data.CACHE_DIR = root / "cache"
+        user_data.MODELS_DIR = root / "models"
         user_data.ensure_user_data_dir = lambda: root
+
+        def resolve_output_path(value, default=None):
+            selected = default if value is None or value == "" else value
+            path = Path(selected) if selected is not None and selected != "" else root
+            resolved = (path if path.is_absolute() else root / path).resolve()
+            self.assertTrue(resolved.is_relative_to(root),
+                            f"Fixture output escaped temporary profile: {resolved}")
+            return resolved
+
+        user_data.resolve_output_path = resolve_output_path
+        self.user_data = user_data
+        runtime = ModuleType(f"{PACKAGE}._runtime")
+        runtime.plugin_mode = True
+        runtime.data_root = root
+        package._runtime = runtime
+        astrbot = ModuleType("astrbot")
+        astrbot.__path__ = []
+        api = ModuleType("astrbot.api")
+        self.logger = Mock(spec=["debug", "info", "warning", "error", "exception", "critical"])
+        api.logger = self.logger
+        astrbot.api = api
         colorama = ModuleType("colorama")
         colorama.Fore = SimpleNamespace(**dict.fromkeys((
             "BLACK", "RED", "GREEN", "YELLOW", "BLUE", "MAGENTA", "CYAN", "WHITE",
@@ -65,15 +93,51 @@ class AstrBotConfigBridgeTests(unittest.TestCase):
         colorama.Style = SimpleNamespace(RESET_ALL="", BRIGHT="", DIM="", NORMAL="")
         module_patch = patch.dict(sys.modules, {PACKAGE: package,
                                                user_data.__name__: user_data,
+                                               runtime.__name__: runtime,
+                                               "astrbot": astrbot,
+                                               "astrbot.api": api,
                                                "colorama": colorama})
         module_patch.start()
         self.addCleanup(module_patch.stop)
         for name in list(sys.modules):
-            if name.startswith(f"{PACKAGE}.") and name != user_data.__name__:
+            if name.startswith(f"{PACKAGE}.") and name not in {user_data.__name__, runtime.__name__}:
                 del sys.modules[name]
         environment = patch.dict(os.environ, {"BILI_BACKUP_DIR": str(root / "backups")})
         environment.start()
         self.addCleanup(environment.stop)
+        filesystem = ExitStack()
+        self.addCleanup(filesystem.close)
+        filesystem.enter_context(patch.object(sys, "dont_write_bytecode", True))
+
+        def check_output(path):
+            if isinstance(path, int):  # Existing file descriptors do not select a new path.
+                return
+            resolved = Path(os.fsdecode(path)).resolve()
+            self.assertTrue(resolved.is_relative_to(root),
+                            f"Test attempted to change non-fixture data: {resolved}")
+
+        for owner, method in ((builtins, "open"), (io, "open")):
+            original = getattr(owner, method)
+
+            def guarded_open(file, mode="r", *args, _original=original, **kwargs):
+                if any(flag in mode for flag in "wax+"):
+                    check_output(file)
+                return _original(file, mode, *args, **kwargs)
+
+            filesystem.enter_context(patch.object(owner, method, side_effect=guarded_open))
+        for method in ("mkdir", "makedirs", "remove", "unlink", "rmdir", "chmod", "replace"):
+            original = getattr(os, method)
+
+            def guarded_operation(path, *args, _method=method, _original=original, **kwargs):
+                check_output(path)
+                if _method == "replace":
+                    check_output(args[0])
+                return _original(path, *args, **kwargs)
+
+            filesystem.enter_context(patch.object(os, method, side_effect=guarded_operation))
+        # Exercise production private-file helpers against the fixture's selected root.
+        del sys.modules[user_data.__name__]
+        self.user_data = importlib.import_module(user_data.__name__)
         self.cfg = importlib.import_module(f"{PACKAGE}.core.config")
         self.bridge = importlib.import_module(f"{PACKAGE}.core.astrbot_config_bridge")
         self.initial = copy.deepcopy(self.cfg.config)
@@ -298,6 +362,35 @@ class AstrBotConfigBridgeTests(unittest.TestCase):
         self.assertEqual(self.cfg.config, self.initial)
         self.assertEqual(self.path.read_bytes(), corrupt_bytes)
 
+    def test_config_sync_handles_aliased_shared_and_cli_dictionaries(self):
+        cli = ModuleType(f"{PACKAGE}.cli.app")
+        cli.config = self.cfg.config
+        before = copy.deepcopy(self.cfg.config)
+        with patch.dict(sys.modules, {cli.__name__: cli}):
+            self.bridge._sync_loaded_config(self.cfg, self.cfg.config)
+        self.assertIs(cli.config, self.cfg.config)
+        self.assertEqual(self.cfg.config, before)
+        self.assertIs(self.cfg.config, self.config_reference)
+
+    def test_non_object_json_config_fails_closed_without_changing_disk_or_memory(self):
+        for value in (["CONFIG_CONTENT_CANARY"], "CONFIG_CONTENT_CANARY", None):
+            with self.subTest(type=type(value).__name__):
+                self.path.write_text(json.dumps(value), encoding="utf-8")
+                before = self.path.read_bytes()
+                with self.assertRaises(ValueError) as caught:
+                    self.cfg.load_config()
+                self.assertIn(str(self.path), str(caught.exception))
+                self.assertNotIn("CONFIG_CONTENT_CANARY", str(caught.exception))
+                for panel in ({"use_astrbot_config": False},
+                              {"use_astrbot_config": True, "apply_sections": []},
+                              {"use_astrbot_config": True, "apply_sections": ["api"],
+                               "api": {"model_brain": "panel"}}):
+                    with self.assertRaises(ValueError):
+                        self.bridge.apply_astrbot_config(panel)
+                self.assertEqual(self.path.read_bytes(), before)
+                self.assertEqual(self.cfg.config, self.initial)
+                self.assertIs(self.cfg.config, self.config_reference)
+
     def test_broken_schema_does_not_change_memory_or_disk(self):
         schema_path = Path(self.temp.name) / "bad-schema.json"
         schema_path.write_text("{invalid", encoding="utf-8")
@@ -306,6 +399,20 @@ class AstrBotConfigBridgeTests(unittest.TestCase):
                 self.apply(["api"], api={"model_brain": "panel"})
         self.assertEqual(self.cfg.config, self.initial)
         self.assert_disk_untouched()
+
+    def test_panel_never_reads_or_overwrites_foreign_config_symlink(self):
+        outside = self.path.parents[1] / "foreign-config.json"
+        outside.write_text('{"api": {"unified_api_key": "FOREIGN_ACCOUNT_CANARY"}}', encoding="utf-8")
+        self.path.unlink()
+        try:
+            self.path.symlink_to(outside)
+        except (OSError, NotImplementedError) as exc:
+            self.skipTest(f"Symlinks unavailable: {exc}")
+        before = copy.deepcopy(self.cfg.config)
+        with self.assertRaises(ValueError):
+            self.apply(["api"], api={"model_brain": "panel-model"})
+        self.assertEqual(self.cfg.config, before)
+        self.assertEqual(outside.read_text(encoding="utf-8"), '{"api": {"unified_api_key": "FOREIGN_ACCOUNT_CANARY"}}')
 
     def test_failed_atomic_replace_preserves_memory_and_existing_file(self):
         with patch.object(self.cfg.os, "replace", side_effect=OSError("write failed")):

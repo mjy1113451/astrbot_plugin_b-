@@ -2,7 +2,7 @@
 import atexit
 import os
 
-from colorama import Fore, Style
+from .display import log, log_exception
 from ..core.config import DATA_DIR
 
 
@@ -98,16 +98,13 @@ def _acquire_bot_lock() -> bool:
         except FileExistsError:
             status = bot_lock_status(clean_stale=True)
             if status["stale"]:
-                print(f"{Fore.YELLOW}[LOCK] Clearing stale lock file (PID: {status['pid']}){Style.RESET_ALL}")
+                log(f"清理已退出进程的锁 (PID: {status['pid']})", "WARN")
                 continue
             pid = status["pid"] or "unknown"
-            print(
-                f"{Fore.RED}[LOCK] A bot instance is already running (PID: {pid})."
-                f"\n[LOCK] Stop that instance before starting another one.{Style.RESET_ALL}"
-            )
+            log(f"已有机器人实例持有锁 (PID: {pid})，请先停止该实例。", "WARN")
             return False
         except OSError as exc:
-            print(f"{Fore.RED}[LOCK] Cannot create lock file: {exc}{Style.RESET_ALL}")
+            log_exception("创建机器人锁失败", exc)
             return False
 
         try:
@@ -121,7 +118,7 @@ def _acquire_bot_lock() -> bool:
                 os.close(fd)
             except OSError:
                 pass
-            print(f"{Fore.RED}[LOCK] Cannot write lock file: {exc}{Style.RESET_ALL}")
+            log_exception("写入机器人锁失败", exc)
             return False
     return False
 

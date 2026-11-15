@@ -4,12 +4,11 @@ import json
 import os
 from dataclasses import dataclass, field
 from pathlib import Path
-from tempfile import NamedTemporaryFile
 from typing import Any
 
 
 ROOT_DIR = Path(__file__).resolve().parents[1]
-from ..core.user_data import DATA_DIR
+from ..core.user_data import DATA_DIR, managed_file_path, write_private_json
 
 CONFIG_FILE = DATA_DIR / "config.json"
 
@@ -91,6 +90,7 @@ class BotSettings:
 
 
 def _load_json(path: Path) -> dict[str, Any]:
+    path = managed_file_path(path)
     if not path.exists():
         return {}
     try:
@@ -109,13 +109,7 @@ def write_runtime_config(data: dict[str, Any]) -> None:
 
 
 def _atomic_write_json(path: Path, data: Any) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    content = json.dumps(data, ensure_ascii=False, indent=2)
-    with NamedTemporaryFile("w", encoding="utf-8", dir=path.parent, delete=False) as tmp:
-        tmp.write(content)
-        tmp.write("\n")
-        temp_name = tmp.name
-    Path(temp_name).replace(path)
+    write_private_json(path, data)
 
 
 def _deep_update(target: dict[str, Any], patch: dict[str, Any]) -> dict[str, Any]:

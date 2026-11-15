@@ -18,6 +18,8 @@ from datetime import datetime
 from pathlib import Path as _Path
 
 from ._mixin_imports import *
+from ..utils.display import log_exception
+from ..core.user_data import TEMP_DIR, resolve_output_path
 from ..api.subtitles import _check_subtitle_mismatch
 
 
@@ -280,9 +282,9 @@ class BrainVideoMixin:
                                 # 标记但继续使用（由AI自行判断）
                                 asr_text = f"[⚠️ ASR内容可能与视频标题不匹配] {asr_text}"
                     else:
-                        log(f"[ASR] ASR识别失败: {asr_result.error}", "WARN")
+                        log("ASR 未取得可用识别结果", "WARN")
                 except Exception as asr_e:
-                    log(f"[ASR] ASR异常: {asr_e}", "WARN")
+                    log_exception("ASR 识别异常", asr_e)
             
             if vision_task:
                 try:
@@ -290,7 +292,7 @@ class BrainVideoMixin:
                     if vision_result:
                         log(f"[EYE] 视觉帧理解完成 ({len(vision_result)}字)", "SUCCESS")
                 except Exception as vis_e:
-                    log(f"[EYE] 视觉帧理解异常: {vis_e}", "WARN")
+                    log_exception("视觉帧理解异常", vis_e)
             
             # ── 耗时汇总 ──
             if asr_result and asr_result.success:
@@ -322,21 +324,21 @@ class BrainVideoMixin:
                 return False, basic
                 
         except ImportError as e:
-            log(f"ASR依赖缺失: {e}", "WARN")
+            log_exception("ASR依赖缺失", e)
             if has_subtitle:
                 return True, subtitle_text
             vis_fallback = await self._understand_with_vision_frames(bvid, title, subtitle_text)
             if vis_fallback:
                 return True, vis_fallback
-            return False, f"{content} | [ASR依赖缺失: {e}]"
+            return False, f"{content} | [ASR依赖缺失]"
         except Exception as e:
-            log(f"联合理解流程异常: {e}", "WARN")
+            log_exception("联合理解流程异常", e)
             if has_subtitle:
                 return True, subtitle_text
             vis_fallback = await self._understand_with_vision_frames(bvid, title, subtitle_text)
             if vis_fallback:
                 return True, vis_fallback
-            return False, f"{content} | [异常: {e}]"
+            return False, f"{content} | [理解流程异常]"
         finally:
             # 🧹 清理：删除视频文件
             if video_path and video_path.exists():
@@ -344,7 +346,7 @@ class BrainVideoMixin:
                     video_path.unlink()
                     log(f"🗑️ 已删除下载的视频文件: {video_path.name}", "DEBUG")
                 except Exception as del_e:
-                    log(f"删除视频文件失败: {del_e}", "DEBUG")
+                    log_exception("删除视频文件失败", del_e)
 
     async def _extract_and_analyze_frames(self, video_path, bvid, title=None, subtitle_text="", frame_count=None):
         """[VISION v2] 从已下载的视频文件抽帧→视觉AI分析→返回画面描述。
@@ -436,7 +438,7 @@ class BrainVideoMixin:
                         return md
                     log("[EYE] 网格抽帧为空，回退经典视觉理解", "WARN")
                 except Exception as e:
-                    log(f"[EYE] 图文学习笔记生成失败，回退经典视觉理解: {e}", "WARN")
+                    log_exception("图文学习笔记生成失败，回退经典视觉理解", e)
 
             # [SMART_FRAME] 经典视觉理解（legacy）
             if duration and duration > 0:
@@ -452,7 +454,7 @@ class BrainVideoMixin:
                 timeout=120, capture_output=True, text=True, **_hidden_process_kwargs())
             
             if ffmpeg_result.returncode != 0:
-                log(f"[EYE] ffmpeg 抽帧失败 (rc={ffmpeg_result.returncode}): {ffmpeg_result.stderr.strip()[-200:]}", "ERROR")
+                log(f"[EYE] ffmpeg 抽帧失败 (rc={ffmpeg_result.returncode})", "ERROR")
             
             frames = sorted(frames_dir.glob("frame_*.jpg"))
             if not frames:
@@ -503,7 +505,7 @@ class BrainVideoMixin:
             result = resp.choices[0].message.content.strip()
             return result
         except Exception as e:
-            log(f"[EYE] 视觉帧分析异常: {e}", "WARN")
+            log_exception("视觉帧分析异常", e)
             return None
         finally:
             # 清理帧文件和目录（但不删视频，由调用方统一清理）
@@ -512,7 +514,7 @@ class BrainVideoMixin:
                     import shutil as _sh
                     _sh.rmtree(str(frames_dir), ignore_errors=True)
             except Exception as e:
-                log(f'非预期异常: {e}', 'WARN')
+                log_exception("视觉临时文件清理失败", e)
 
     async def _ai_decide_frame_count(self, title="", duration=0, tags=None, category="", subtitle_text=""):
         """[SMART_FRAME] AI根据视频信息智能决定：是否抽帧 + 抽多少帧(10-300)。
@@ -585,8 +587,8 @@ class BrainVideoMixin:
             else:
                 return True, VISION_FRAME_COUNT, "AI返回格式异常，使用默认值"
         except Exception as e:
-            log(f"[SMART_FRAME] AI决策异常: {e}", "WARN")
-            return True, VISION_FRAME_COUNT, f"异常回退: {e}"
+            log_exception("智能抽帧 AI 决策异常", e)
+            return True, VISION_FRAME_COUNT, "异常回退，使用默认帧数"
 
     async def _analyze_timeline_grids(self, video_path, title=None, subtitle_text=""):
         """Send timestamped 3x3 timeline grids to the vision model as one visual context."""
@@ -644,7 +646,7 @@ class BrainVideoMixin:
             log(f"[EYE] 时间轴网格分析完成，已回填 {screenshots} 张精确截图", "SUCCESS")
             return markdown
         except Exception as error:
-            log(f"[EYE] 时间轴网格分析异常，回退经典视觉分析: {error}", "WARN")
+            log_exception("时间轴网格分析异常，回退经典视觉分析", error)
             return None
 
     async def _understand_with_vision_frames(self, bvid, title=None, subtitle_text=""):
@@ -716,7 +718,7 @@ class BrainVideoMixin:
                 "-frames:v", str(actual_frame_count), pattern],
                 timeout=120, capture_output=True, **_hidden_process_kwargs())
             if ffmpeg_result.returncode != 0:
-                log(f"[EYE] 视觉理解: ffmpeg 抽帧失败 (rc={ffmpeg_result.returncode}): {ffmpeg_result.stderr.decode(errors='replace')[-200:]}", "ERROR")
+                log(f"[EYE] 视觉理解: ffmpeg 抽帧失败 (rc={ffmpeg_result.returncode})", "ERROR")
             frames = sorted(frames_dir.glob("frame_*.jpg"))
             if not frames:
                 log(f"[EYE] 视觉理解: 抽帧失败 (无输出文件)", "WARN")
@@ -760,10 +762,10 @@ class BrainVideoMixin:
                 request_timeout=180
             )
             result = resp.choices[0].message.content.strip()
-            log(f"[EYE] 视觉理解完成 ({len(result)}字): {result[:100]}...", "SUCCESS")
+            log(f"[EYE] 视觉理解完成 ({len(result)}字)", "SUCCESS")
             return f"【视觉画面理解】\n{result}"
         except Exception as e:
-            log(f"[EYE] 视觉理解异常: {e}", "WARN")
+            log_exception("视觉理解异常", e)
             return None
         finally:
             # 清理临时文件: 删除视频 + 帧文件 + 帧目录
@@ -777,7 +779,7 @@ class BrainVideoMixin:
                         import shutil as _sh
                         _sh.rmtree(str(frames_dir), ignore_errors=True)
             except Exception as e:
-                log(f'非预期异常: {e}', 'WARN')
+                log_exception("视觉临时文件清理失败", e)
 
     @staticmethod
     def _is_music_only_subtitle(text: str) -> bool:
@@ -834,7 +836,7 @@ class BrainVideoMixin:
                 data = json.loads(raw[start:end+1])
                 return data.get("sufficient", True), data.get("reason", "AI判断完成")
         except Exception as e:
-            log(f"字幕充分性AI判断失败: {e}", "WARN")
+            log_exception("字幕充分性 AI 判断失败", e)
         # 默认：字幕超过150字就认为足够
         return len(subtitle) > 150, "默认规则(>150字)"
 
@@ -909,7 +911,7 @@ class BrainVideoMixin:
             else:
                 return False, "AI返回无JSON"
         except Exception as e:
-            log(f"人声AI判断失败: {e}", "WARN")
+            log_exception("人声 AI 判断失败", e)
         # 默认：不确定就不下载
         return False, "AI判断异常-默认跳过"
 
@@ -964,7 +966,7 @@ class BrainVideoMixin:
                     reason = f"{reason} | 实际内容:{content_summary}"
                 return is_match, confidence, reason
         except Exception as e:
-            log(f"字幕内容AI验证失败: {e}", "WARN")
+            log_exception("字幕内容 AI 验证失败", e)
         # 异常时默认放行（宁可不拒绝，交给后续AI决策）
         return True, 0.4, "AI验证异常-默认放行"
 
@@ -1045,14 +1047,14 @@ class BrainVideoMixin:
                             log(f"    → 已标记: {os.path.relpath(new_path, KNOWLEDGE_BASE_DIR)}", "KB")
                             quarantined += 1
                         except OSError as re_e:
-                            log(f"    → 重命名失败: {re_e}", "WARN")
+                            log_exception("知识审查重命名失败", re_e)
                 elif not is_match:
                     log(f"  ⚠️ 知识库可疑条目(低置信): conf={conf:.2f} | {reason} | {rel}", "KB")
                 else:
                     log(f"  ✅ 知识库条目正常: conf={conf:.2f} | {reason} | {rel}", "KB")
                     
             except Exception as e:
-                log(f"  ⚠️ 审查单条失败: {e}", "KB")
+                log_exception("知识单条审查失败", e)
         
         if quarantined > 0:
             log(f"📚 知识库审查完成: 已标记 {quarantined} 个垃圾条目（文件名前缀[待审查]），请人工复核后删除", "KB")
@@ -1099,7 +1101,7 @@ class BrainVideoMixin:
                                 except Exception:
                                     pass
                 except Exception as e:
-                    log(f"[WARN] {log_label} WBI密钥获取失败: {e}", "WARN")
+                    log_exception("WBI 密钥获取失败", e)
 
                 def _sign(params_dict):
                     if not wkeys:
@@ -1123,9 +1125,11 @@ class BrainVideoMixin:
                 # ffmpeg 检测
                 ffmpeg = find_ffmpeg() or shutil.which('ffmpeg')
 
-                out_dir = os.path.join(tempfile.gettempdir(), "bilibili_asr", bvid)
-                os.makedirs(out_dir, exist_ok=True)
-                out_path = os.path.join(out_dir, f"{bvid}.mp4")
+                if not re.fullmatch(r"BV[0-9A-Za-z]{10}", bvid):
+                    raise ValueError("Invalid Bilibili video ID")
+                out_dir = resolve_output_path(TEMP_DIR / "bilibili_asr" / bvid)
+                out_dir.mkdir(parents=True, exist_ok=True)
+                out_path = str(resolve_output_path(out_dir / f"{bvid}.mp4"))
 
                 # ── 方案A: DASH 音视频分离 + ffmpeg 合并（有声音 + 高清）──
                 if ffmpeg:
@@ -1145,8 +1149,8 @@ class BrainVideoMixin:
                                 video_url = dash['video'][0]['base_url']
                                 audio_url = dash['audio'][0]['base_url']
 
-                                video_tmp = os.path.join(out_dir, f"{bvid}_video.m4s")
-                                audio_tmp = os.path.join(out_dir, f"{bvid}_audio.m4s")
+                                video_tmp = str(resolve_output_path(out_dir / f"{bvid}_video.m4s"))
+                                audio_tmp = str(resolve_output_path(out_dir / f"{bvid}_audio.m4s"))
 
                                 try:
                                     # 下载视频流
@@ -1186,7 +1190,7 @@ class BrainVideoMixin:
                                 log(f"[{log_label}(DASH)] 耗时 {download_sec:.1f}s, 大小 {file_size_mb:.1f}MB", "DEBUG")
                                 return out_path, download_sec, file_size_mb
                     except Exception as e:
-                        log(f"[{log_label}] DASH模式失败，回退FLV: {e}", "DEBUG")
+                        log_exception("DASH 下载失败，回退 FLV", e)
 
                 # ── 方案B: FLV 单流回退（无需 ffmpeg，音视频一体）──
                 play_params = _sign({
@@ -1215,5 +1219,5 @@ class BrainVideoMixin:
                 return out_path, download_sec, file_size_mb
         except Exception as e:
             download_sec = _t2.time() - _dl_start
-            log(f"{log_label}失败({download_sec:.1f}s): {e}", "WARN")
+            log_exception("视频下载失败", e)
             return None, download_sec, 0

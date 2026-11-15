@@ -106,17 +106,16 @@ def _safe_task_callback(task_name="unknown"):
         try:
             exc = task.exception()
             if exc is not None:
-                from .display import log as _log
-                _log(f"[WARN] 后台任务 [{task_name}] 异常: {exc}", "ERROR")
-                import traceback
-                traceback.print_exc()
+                from .display import log_exception
+                log_exception(f"后台任务 [{task_name}] 异常", exc)
         except _asyncio.CancelledError:
             from .display import log as _log
             _log(f"🔇 后台任务 [{task_name}] 被取消 (CancelledError)", "INFO")
         except _asyncio.InvalidStateError:
             pass
         except Exception as e:
-            print(f"[_safe_task_callback] 回调自身异常: {e}", flush=True)
+            from .display import log_exception
+            log_exception("后台回调异常", e)
     return _cb
 
 

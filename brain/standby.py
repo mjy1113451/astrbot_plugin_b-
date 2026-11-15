@@ -4,7 +4,7 @@
 v2: 支持在任何视频下被@自动总结（通过 B站 @我通知 API + 评论自带上下文）
 用户只需评论 "@bot 总结这个视频" 即可，无需手动提供 BV 号。
 """
-import asyncio, json, os, sys, re, time, hashlib, traceback
+import asyncio, json, os, sys, re, time, hashlib
 
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
@@ -12,8 +12,7 @@ import httpx
 from ..core.config import config as _core_config, resolve_knowledge_base_dir
 from ..core.user_data import DATA_DIR as _USER_DATA_DIR
 from ..core.platform_actions import public_commenting_enabled
-from colorama import Fore, Style, init as colorama_init
-colorama_init(autoreset=True)
+from ..utils.display import log, log_exception
 
 DATA_DIR = str(_USER_DATA_DIR)
 
@@ -120,15 +119,7 @@ class StandbyBot:
                 pass
 
     def _log(self, msg: str, level: str = "INFO"):
-        color = {"INFO": Fore.WHITE, "OK": Fore.GREEN, "WARN": Fore.YELLOW, "ERR": Fore.RED,
-                 "AT": Fore.MAGENTA, "NTF": Fore.CYAN}.get(level, Fore.WHITE)
-        icon = {"INFO": "[SB]", "OK": "[OK]", "WARN": "[WARN]", "ERR": "[ERR]",
-                "AT": "[AT]", "NTF": "[NTF]"}.get(level, "[SB]")
-        text = f"{icon} {msg}"
-        try:
-            print(f"{color}{text}{Style.RESET_ALL}")
-        except UnicodeEncodeError:
-            print(text)
+        log(f"[SB] {msg}", {"OK": "SUCCESS", "ERR": "ERROR"}.get(level, level))
 
     # ── 通用B站API工具 ──
     async def _aid_to_bvid(self, client: httpx.AsyncClient, aid: int) -> str:
@@ -176,9 +167,9 @@ class StandbyBot:
             d = r.json()
             if d.get('code') == 0:
                 return True
-            self._log(f"回复评论失败 code={d.get('code')} msg={d.get('message','')}", "WARN")
+            self._log("回复评论失败，平台未接受操作", "WARN")
         except Exception as e:
-            self._log(f"回复评论异常: {e}", "ERR")
+            log_exception("待机回复评论异常", e)
         return False
 
     # ── 核心：@我通知拉取（notification mode）──
@@ -232,7 +223,7 @@ class StandbyBot:
                     'ctime': int(ctime_val) if ctime_val else 0,
                 })
         except Exception as e:
-            self._log(f"获取@我通知失败: {e}", "WARN")
+            log_exception("待机获取@我通知失败", e)
         return items
 
     async def _get_my_videos(self, client: httpx.AsyncClient) -> list:
@@ -269,7 +260,7 @@ class StandbyBot:
                         'ctime': rep.get('ctime', 0),
                     })
         except Exception as e:
-            self._log(f"获取评论失败: {e}", "WARN")
+            log_exception("待机获取评论失败", e)
         return comments
 
     # ── AI 调用 ──
@@ -302,7 +293,7 @@ class StandbyBot:
                 if choices:
                     return choices[0].get('message', {}).get('content', '')
         except Exception as e:
-            self._log(f"AI调用失败: {e}", "ERR")
+            log_exception("待机AI调用失败", e)
         return ""
 
     # ── @触发检测(v2: 不再要求评论里提供BV号，自动用所在视频) ──
@@ -389,7 +380,7 @@ class StandbyBot:
                         await self._process_own_videos(client)
 
             except Exception as e:
-                self._log(f"主循环异常: {e}", "ERR")
+                log_exception("待机主循环异常", e)
                 self.stats['errors'] += 1
                 save_stats(self.stats)
 
@@ -608,7 +599,7 @@ class StandbyBot:
                     }
                 }
         except Exception as e:
-            self._log(f"获取视频信息失败: {e}", "ERR")
+            log_exception("待机获取视频信息失败", e)
         return None
 
     async def _get_subtitles(self, client: httpx.AsyncClient, bvid: str) -> str:
@@ -759,15 +750,14 @@ class StandbyBot:
 async def main():
     bot = StandbyBot()
     if not bot.api_key:
-        print("[ERR] 请先配置API Key")
+        log("请先配置API Key", "ERROR")
         return
     try:
         await bot.run()
     except KeyboardInterrupt:
-        print("\n[SB] 待机模式已停止")
+        log("待机模式已停止", "INFO")
     except Exception as e:
-        print(f"[ERR] {e}")
-        traceback.print_exc()
+        log_exception("待机模式运行失败", e)
 
 if __name__ == '__main__':
     if os.name == 'nt':

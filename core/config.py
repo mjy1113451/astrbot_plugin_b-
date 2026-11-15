@@ -6,22 +6,26 @@
 import os
 import sys
 import json
+from copy import deepcopy
 import hashlib, base64, secrets
 from colorama import Fore, Style
 from ..utils.storage import get_backup_dir
-from ..utils.display import mask_secret
+from ..utils.display import mask_secret, log, log_exception
 from .user_data import (
     DATA_DIR as _USER_DATA_DIR,
     HIGHLIGHTS_DIR as _USER_HIGHLIGHTS_DIR,
     KNOWLEDGE_BASE_DIR as _USER_KNOWLEDGE_BASE_DIR,
     USER_DATA_DIR as _USER_DATA_ROOT,
     ensure_user_data_dir,
+    managed_file_path,
+    resolve_output_path,
+    write_private_json,
 )
 
 # ===== 路径常量 =====
 # BASE_DIR is source code only. All user-specific data is stored outside the project.
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-USER_DATA_DIR = str(ensure_user_data_dir())
+USER_DATA_DIR = str(_USER_DATA_ROOT)
 DATA_DIR = str(_USER_DATA_DIR)
 CONFIG_FILE = os.path.join(DATA_DIR, "config.json")
 BOT_LOCK_FILE = os.path.join(DATA_DIR, "bot.lock")
@@ -42,20 +46,20 @@ RUNTIME_STATE_FILE = os.path.join(DATA_DIR, "bot_runtime_state.json")
 KNOWLEDGE_BASE_DIR = str(_USER_KNOWLEDGE_BASE_DIR)
 HIGHLIGHTS_DIR = str(_USER_HIGHLIGHTS_DIR)
 
-os.makedirs(DATA_DIR, exist_ok=True)
-
 # ===== 知识库目录解析 =====
 # 支持通过 config.json 的 knowledge_base_dir / knowledge.base_dir 自定义知识库目录，
-# 未配置时回退到默认的 BASE_DIR/KnowledgeBase。
+# 相对目录基于当前用户数据根，插件模式不得指向根外。
 def resolve_knowledge_base_dir(cfg=None):
-    """从配置解析知识库目录；未配置回退默认 KnowledgeBase。"""
+    """从配置解析知识库目录；未配置回退当前数据根的 KnowledgeBase。"""
     if cfg is None:
         cfg = config
-    if cfg and isinstance(cfg, dict):
-        kb = cfg.get("knowledge_base_dir") or cfg.get("knowledge", {}).get("base_dir")
-        if kb:
-            return os.path.join(BASE_DIR, kb) if not os.path.isabs(kb) else kb
-    return KNOWLEDGE_BASE_DIR
+    kb = None
+    if isinstance(cfg, dict):
+        knowledge = cfg.get("knowledge")
+        kb = cfg.get("knowledge_base_dir") or (
+            knowledge.get("base_dir") if isinstance(knowledge, dict) else None
+        )
+    return str(resolve_output_path(kb, default=_USER_KNOWLEDGE_BASE_DIR))
 
 # ===== 敏感词加密 =====
 CIPHER_KEY_FILE = os.path.join(USER_DATA_DIR, ".cipher_key")
@@ -65,16 +69,18 @@ def _get_or_create_cipher_key():
     env_key = os.getenv("BILI_CIPHER_KEY")
     if env_key:
         return env_key.encode()
-    if os.path.exists(CIPHER_KEY_FILE):
-        with open(CIPHER_KEY_FILE, "r") as f:
-            return f.read().strip().encode()
+    path = managed_file_path(CIPHER_KEY_FILE)
+    if path.exists():
+        return path.read_text(encoding="utf-8").strip().encode()
+    path.parent.mkdir(parents=True, exist_ok=True)
     key = secrets.token_hex(32).encode()
+    flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0)
     try:
-        with open(CIPHER_KEY_FILE, "w") as f:
-            f.write(key.decode())
-        os.chmod(CIPHER_KEY_FILE, 0o600)
-    except OSError:
-        pass
+        fd = os.open(path, flags, 0o600)
+    except FileExistsError:
+        return managed_file_path(path).read_text(encoding="utf-8").strip().encode()
+    with os.fdopen(fd, "w", encoding="utf-8") as stream:
+        stream.write(key.decode())
     return key
 
 def _cipher_encrypt(plaintext: str, key: bytes = None) -> str:
@@ -87,9 +93,16 @@ def _cipher_encrypt(plaintext: str, key: bytes = None) -> str:
     return base64.b64encode(encrypted).decode()
 
 def _cipher_decrypt(ciphertext: str, key: bytes = None) -> str:
-    """解密base64为原文"""
+    """读取已有密钥解密；加载配置不能创建或替换密钥。"""
     if key is None:
-        key = _get_or_create_cipher_key()
+        env_key = os.getenv("BILI_CIPHER_KEY")
+        if env_key:
+            key = env_key.encode()
+        else:
+            path = managed_file_path(CIPHER_KEY_FILE)
+            if not path.exists():
+                return ciphertext
+            key = path.read_text(encoding="utf-8").strip().encode()
     try:
         encrypted = base64.b64decode(ciphertext)
         digest = hashlib.sha256(key).digest()
@@ -97,8 +110,6 @@ def _cipher_decrypt(ciphertext: str, key: bytes = None) -> str:
         return decrypted.decode("utf-8")
     except (ValueError, UnicodeDecodeError, Exception):
         return ciphertext  # fallback
-
-os.makedirs(KNOWLEDGE_BASE_DIR, exist_ok=True)
 
 # ===== 厂商预设（内置官方 OpenAI 兼容格式）=====
 # 默认就是 OpenAI 兼容（/v1/chat/completions），各厂商填入其官方 base_url 与默认模型名。
@@ -557,11 +568,14 @@ def normalize_config(cfg):
 
 # ===== 配置加载/保存 =====
 def load_config():
-    """加载配置文件，合并默认值，解密敏感词"""
-    if os.path.exists(CONFIG_FILE):
+    """只读加载配置；缺失时返回独立默认值，不创建目录或配置文件。"""
+    path = managed_file_path(CONFIG_FILE)
+    if path.exists():
         try:
-            with open(CONFIG_FILE, 'r', encoding='utf-8') as f:
+            with path.open('r', encoding='utf-8') as f:
                 cfg = json.load(f)
+            if not isinstance(cfg, dict):
+                raise ValueError(f"业务配置文件顶层必须是 JSON 对象: {path}")
             cfg = normalize_config(cfg)
             # 清洗脱敏占位符：'[已隐藏]' 视为未配置（避免被当真实 key 使用）
             _api = cfg.setdefault("api", {})
@@ -573,11 +587,11 @@ def load_config():
                 _fb["api_key"] = ""
             for key in DEFAULT_CONFIG:
                 if key not in cfg:
-                    cfg[key] = DEFAULT_CONFIG[key]
+                    cfg[key] = deepcopy(DEFAULT_CONFIG[key])
                 elif isinstance(cfg[key], dict):
                     for sub_key in DEFAULT_CONFIG[key]:
                         if sub_key not in cfg[key]:
-                            cfg[key][sub_key] = DEFAULT_CONFIG[key][sub_key]
+                            cfg[key][sub_key] = deepcopy(DEFAULT_CONFIG[key][sub_key])
             # 解密 blocked_keywords
             kw_list = cfg.get("reply_safety", {}).get("blocked_keywords", [])
             if kw_list and any(len(k) > 10 for k in kw_list):
@@ -587,32 +601,45 @@ def load_config():
             return cfg
         except (OSError, json.JSONDecodeError) as exc:
             raise ValueError(f"无法读取业务配置文件: {CONFIG_FILE}") from exc
-    save_config(DEFAULT_CONFIG)
-    return DEFAULT_CONFIG.copy()
+    return normalize_config(deepcopy(DEFAULT_CONFIG))
+
+
+def initialize_config():
+    """在业务启动时显式初始化当前 profile，原位更新已导入的配置引用。"""
+    global KNOWLEDGE_BASE_DIR
+    updated = load_config()
+    knowledge_dir = resolve_knowledge_base_dir(updated)
+    path = managed_file_path(CONFIG_FILE)
+    ensure_user_data_dir()
+    if not path.exists() and not save_config(deepcopy(updated)):
+        raise OSError("Unable to initialize business configuration")
+    os.makedirs(knowledge_dir, exist_ok=True)
+    config.clear()
+    config.update(updated)
+    KNOWLEDGE_BASE_DIR = knowledge_dir
+    return config
 
 
 def save_config(cfg):
     """保存配置文件，加密敏感词（原子写入防崩溃损坏）"""
     try:
+        resolved_kb = resolve_knowledge_base_dir(cfg)
         cfg = normalize_config(cfg)
         # 加密 blocked_keywords 再存盘
         kw_list = cfg.get("reply_safety", {}).get("blocked_keywords", [])
         if kw_list and not all(k.startswith(("enc:", "===")) or len(k) < 3 for k in kw_list):
             cfg["reply_safety"]["blocked_keywords"] = [_cipher_encrypt(k) for k in kw_list]
-        tmp = CONFIG_FILE + '.tmp'
-        with open(tmp, 'w', encoding='utf-8') as f:
-            json.dump(cfg, f, ensure_ascii=False, indent=4)
-        os.replace(tmp, CONFIG_FILE)
+        write_private_json(CONFIG_FILE, cfg, indent=4)
         # 存完后解密回内存，保持内存中明文
         if kw_list:
             cfg["reply_safety"]["blocked_keywords"] = kw_list
         # 知识库目录可能随配置变化，重新解析（供 core.config 动态访问者使用）
         global KNOWLEDGE_BASE_DIR
-        KNOWLEDGE_BASE_DIR = resolve_knowledge_base_dir(cfg)
+        KNOWLEDGE_BASE_DIR = resolved_kb
         os.makedirs(KNOWLEDGE_BASE_DIR, exist_ok=True)
         return True
     except Exception as e:
-        print(f"{Fore.RED}[ERROR] 保存配置文件失败: {e}{Style.RESET_ALL}")
+        log_exception("保存配置文件失败", e)
         return False
 
 
@@ -630,35 +657,32 @@ def get_config_or_env(section, key, env_name):
 
 # ===== JSON 辅助 =====
 def load_json_file(path, default):
-    if os.path.exists(path):
-        try:
-            with open(path, "r", encoding="utf-8") as f:
+    try:
+        path = managed_file_path(path)
+        if path.exists():
+            with path.open("r", encoding="utf-8") as f:
                 return json.load(f)
-        except Exception as e:
-            print(f"[WARN] 加载 JSON 文件失败: {path} - {e}", flush=True)
+    except Exception as e:
+        log_exception("加载 JSON 文件失败", e)
     return default.copy() if isinstance(default, dict) else default
 
 
 def save_json_file(path, data):
     """原子写入 JSON 文件（tmp+replace 防止断电损坏）"""
     try:
-        tmp = path + '.tmp'
-        with open(tmp, 'w', encoding='utf-8') as f:
-            json.dump(data, f, ensure_ascii=False, indent=2)
-        os.replace(tmp, path)
+        write_private_json(path, data)
         return True
     except Exception as e:
-        print(f"[WARN] 保存 JSON 文件失败: {path} - {e}", flush=True)
+        log_exception("保存 JSON 文件失败", e)
         return False
 
 
-# 加载当前配置（模块导入时自动加载）
+# 导入仅载入已有配置或内存默认值；持久化由 initialize_config 显式执行。
 config = load_config()
 
 # 根据配置解析知识库目录（支持 knowledge_base_dir / knowledge.base_dir 自定义），
 # 覆盖上面的默认回退值，使所有 `from core.config import KNOWLEDGE_BASE_DIR` 获取到正确路径。
 KNOWLEDGE_BASE_DIR = resolve_knowledge_base_dir(config)
-os.makedirs(KNOWLEDGE_BASE_DIR, exist_ok=True)
 
 # ===== 派生配置变量（供其他模块导入） =====
 # [FIX] 改为 __getattr__ 动态属性，确保用户通过菜单修改配置后实时生效。
@@ -759,7 +783,7 @@ __all__ = (list(_CONFIG_PATHS.keys()) +
             "BOT_DIARY_FILE", "SELF_EVOLUTION_FILE", "AGENT_SKILL_LOG_FILE",
             "RUNTIME_STATE_FILE", "KNOWLEDGE_BASE_DIR", "HIGHLIGHTS_DIR",
             "CIPHER_KEY_FILE", "DEFAULT_CONFIG", "config",
-           "normalize_config", "load_config", "save_config", "get_bot_name",
+           "normalize_config", "load_config", "initialize_config", "save_config", "get_bot_name",
             "get_config_or_env", "mask_secret", "load_json_file",
             "save_json_file", "log"])
 
@@ -790,34 +814,3 @@ def __getattr__(name):
                 return default
         return d if d is not None else default
     raise AttributeError(f"module '{__name__}' has no attribute '{name}'")
-
-
-
-# ===== 日志系统（供所有模块共用） =====
-def log(msg, level="INFO"):
-    """彩色日志输出"""
-    colors = {
-        "INFO": Fore.WHITE,
-        "SUCCESS": Fore.GREEN,
-        "WARN": Fore.YELLOW,
-        "ERROR": Fore.RED,
-        "DEBUG": Fore.CYAN,
-        "CONFIG": Fore.CYAN,
-        "BRAIN": Fore.MAGENTA,
-        "BILI": Fore.BLUE,
-        "COMMENT": Fore.GREEN,
-        "PRIVATE": Fore.MAGENTA,
-        "DANMAKU": Fore.CYAN,
-        "EYE": Fore.YELLOW,
-        "ASR": Fore.RED,
-        "MEMORY": Fore.BLUE,
-        "DIARY": Fore.GREEN,
-        "EVOLVE": Fore.MAGENTA,
-        "ENERGY": Fore.CYAN,
-        "SAFETY": Fore.YELLOW,
-        "PSYCHO": Fore.MAGENTA,
-    }
-    from datetime import datetime
-    timestamp = datetime.now().strftime("%H:%M:%S")
-    color = colors.get(level, Fore.WHITE)
-    print(f"{color}[{timestamp}][{level}] {msg}{Style.RESET_ALL}")

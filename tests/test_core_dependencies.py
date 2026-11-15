@@ -4,14 +4,15 @@
 """
 import asyncio
 import builtins
-from contextlib import contextmanager
+from contextlib import ExitStack, contextmanager
 import importlib.metadata
 import importlib.util
 from pathlib import Path
 import sys
+import tempfile
 from types import ModuleType, SimpleNamespace
 import unittest
-from unittest.mock import Mock, patch
+from unittest.mock import Mock, call, patch
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -52,44 +53,65 @@ def dependency_environment(*, missing=(), versions=None, unknown=()):
         yield
 
 
+@contextmanager
+def main_environment():
+    with tempfile.TemporaryDirectory(prefix="dependency-tests-") as temporary:
+        # StarTools supplies a path only; constructors must not create it.
+        data_root = Path(temporary) / "host-data"
+        logger = Mock()
+        api = ModuleType("astrbot.api")
+        api.logger = logger
+        event = ModuleType("astrbot.api.event")
+        event.AstrMessageEvent = object
+        event.filter = SimpleNamespace(command=lambda name: lambda func: func)
+        star = ModuleType("astrbot.api.star")
+        star.Context = object
+        star.Star = type("Star", (), {"__init__": lambda self, context: None})
+        star.StarTools = SimpleNamespace(get_data_dir=Mock(return_value=data_root))
+        package = ModuleType(PACKAGE)
+        package.__path__ = [str(ROOT)]
+        package.__package__ = PACKAGE
+        modules = {
+            PACKAGE: package,
+            "astrbot": ModuleType("astrbot"),
+            "astrbot.api": api,
+            "astrbot.api.event": event,
+            "astrbot.api.star": star,
+        }
+        spec = importlib.util.spec_from_file_location(f"{PACKAGE}.main", MAIN_PATH)
+        module = importlib.util.module_from_spec(spec)
+        modules[spec.name] = module
+        with patch.dict(sys.modules, modules), dependency_environment(), \
+                patch.object(sys, "dont_write_bytecode", True):
+            # Isolate both the entry point and its package-local runtime state.
+            for name in tuple(sys.modules):
+                if name.startswith(PACKAGE + ".") and name != spec.name:
+                    del sys.modules[name]
+            spec.loader.exec_module(module)
+            logger.reset_mock()
+            try:
+                yield module, logger
+            finally:
+                if data_root.exists():
+                    raise AssertionError("Lazy entry created host user data")
+
+
 def load_main():
-    logger = Mock()
-    api = ModuleType("astrbot.api")
-    api.logger = logger
-    event = ModuleType("astrbot.api.event")
-    event.AstrMessageEvent = object
-    event.filter = SimpleNamespace(command=lambda name: lambda func: func)
-    star = ModuleType("astrbot.api.star")
-    star.Context = object
-    star.Star = type("Star", (), {"__init__": lambda self, context: None})
-    package = ModuleType(PACKAGE)
-    package.__path__ = [str(ROOT)]
-    package.__package__ = PACKAGE
-    modules = {
-        PACKAGE: package,
-        "astrbot": ModuleType("astrbot"),
-        "astrbot.api": api,
-        "astrbot.api.event": event,
-        "astrbot.api.star": star,
-    }
-    spec = importlib.util.spec_from_file_location(f"{PACKAGE}.main", MAIN_PATH)
-    module = importlib.util.module_from_spec(spec)
-    modules[spec.name] = module
-    with patch.dict(sys.modules, modules), dependency_environment():
-        spec.loader.exec_module(module)
-    logger.reset_mock()
-    return module, logger
+    with main_environment() as loaded:
+        return loaded
 
 
 class CoreDependencyTests(unittest.TestCase):
     def setUp(self):
-        self.main, self.logger = load_main()
+        stack = ExitStack()
+        self.addCleanup(stack.close)
+        self.main, self.logger = stack.enter_context(main_environment())
 
     def test_loading_main_restores_astrbot_modules_and_keeps_business_imports_lazy(self):
         names = (
             "astrbot", "astrbot.api", "astrbot.api.event", "astrbot.api.star",
             "core.config", "cli.app", "brain.agent_brain", PACKAGE,
-            f"{PACKAGE}.main", f"{PACKAGE}.core.config",
+            f"{PACKAGE}.main", f"{PACKAGE}._runtime", f"{PACKAGE}.core.config",
             f"{PACKAGE}.cli.app", f"{PACKAGE}.brain.agent_brain",
         )
         missing = object()
@@ -100,6 +122,21 @@ class CoreDependencyTests(unittest.TestCase):
         self.assertEqual(sys.path, path_before)
         for name, original in before.items():
             self.assertIs(sys.modules.get(name, missing), original, name)
+
+    def test_constructor_binds_host_path_without_loading_business_or_creating_data(self):
+        runtime = self.main._runtime
+        get_data_dir = sys.modules["astrbot.api.star"].StarTools.get_data_dir
+        get_data_dir.assert_not_called()
+        self.assertFalse(runtime.plugin_mode)
+        self.assertIsNone(runtime.data_root)
+        bot = self.main.BilibiliLearningBot(None)
+        self.assertIsNone(bot.config)
+        get_data_dir.assert_called_once_with(runtime.PLUGIN_NAME)
+        self.assertTrue(runtime.plugin_mode)
+        self.assertEqual(runtime.data_root, get_data_dir.return_value.resolve())
+        self.assertFalse(runtime.data_root.exists())
+        self.assertEqual({name for name in sys.modules if name.startswith(PACKAGE + ".")},
+                         {f"{PACKAGE}.main", f"{PACKAGE}._runtime"})
 
     def test_core_minimums_are_accepted(self):
         with dependency_environment():
@@ -181,7 +218,9 @@ class CoreDependencyTests(unittest.TestCase):
 
 class StartBotDependencyTests(unittest.IsolatedAsyncioTestCase):
     def setUp(self):
-        self.main, self.logger = load_main()
+        stack = ExitStack()
+        self.addCleanup(stack.close)
+        self.main, self.logger = stack.enter_context(main_environment())
         self.bot = self.main.BilibiliLearningBot(None)
         self.event = SimpleNamespace(plain_result=lambda text: text)
         self.cli = SimpleNamespace(_release_bot_lock=Mock())
@@ -208,17 +247,28 @@ class StartBotDependencyTests(unittest.IsolatedAsyncioTestCase):
         package.__package__ = prefix
         core = ModuleType(f"{prefix}.core")
         core.__path__ = [str(ROOT / "core")]
+        config = ModuleType(f"{prefix}.core.config")
+        config.initialize_config = Mock()
+        core.config = config
         brain_package = ModuleType(f"{prefix}.brain")
         brain_package.__path__ = [str(ROOT / "brain")]
         brain = ModuleType(f"{prefix}.brain.agent_brain")
         brain.AgentBrain = Mock(return_value=SimpleNamespace(run=run))
+        utils = ModuleType(f"{prefix}.utils")
+        utils.__path__ = []
+        display = ModuleType(f"{prefix}.utils.display")
+        display.log = Mock()
+        display.log_exception = Mock()
         package.core = core
         package.brain = brain_package
+        package.utils = utils
+        utils.display = display
         brain_package.agent_brain = brain
         with patch.dict(sys.modules, {
             prefix: package, f"{prefix}.main": self.main,
-            core.__name__: core, brain_package.__name__: brain_package,
-            brain.__name__: brain,
+            core.__name__: core, config.__name__: config,
+            brain_package.__name__: brain_package, brain.__name__: brain,
+            utils.__name__: utils, display.__name__: display,
         }):
             yield brain.AgentBrain
 
@@ -230,12 +280,52 @@ class StartBotDependencyTests(unittest.IsolatedAsyncioTestCase):
         with dependency_environment(), self.brain_environment() as factory, patch.dict(
             sys.modules, {bridge.__name__: bridge}
         ):
+            initialize = sys.modules[f"{self.main.__package__}.core.config"].initialize_config
+            calls = Mock()
+            calls.attach_mock(initialize, "initialize")
+            calls.attach_mock(bridge.apply_astrbot_config, "apply")
+            calls.attach_mock(factory, "brain")
             factory.side_effect = lambda: (
                 bridge.apply_astrbot_config.assert_called_once_with(panel)
                 or SimpleNamespace(run=lambda: asyncio.Event().wait())
             )
             replies = await self.start()
         self.assertIn("已在后台启动", replies[0])
+        initialize.assert_called_once_with()
+        self.assertEqual(calls.mock_calls, [call.initialize(), call.apply(panel), call.brain()])
+
+    async def test_start_without_panel_configuration_explicitly_initializes_before_brain(self):
+        with dependency_environment(), self.brain_environment() as factory:
+            initialize = sys.modules[f"{self.main.__package__}.core.config"].initialize_config
+            calls = Mock()
+            calls.attach_mock(initialize, "initialize")
+            calls.attach_mock(factory, "brain")
+            replies = await self.start()
+            self.assertNotIn(f"{self.main.__package__}.core.astrbot_config_bridge", sys.modules)
+        self.assertIn("已在后台启动", replies[0])
+        self.assertIsNone(self.bot.config)
+        initialize.assert_called_once_with()
+        factory.assert_called_once_with()
+        self.assertEqual(calls.mock_calls, [call.initialize(), call.brain()])
+        self.assertIsNotNone(self.main._brain_task)
+
+    async def test_initialization_failure_prevents_bridge_and_brain_creation(self):
+        self.bot.config = {"use_astrbot_config": True}
+        bridge = ModuleType(f"{self.main.__package__}.core.astrbot_config_bridge")
+        bridge.apply_astrbot_config = Mock()
+        with dependency_environment(), self.brain_environment() as factory, patch.dict(
+            sys.modules, {bridge.__name__: bridge}
+        ):
+            initialize = sys.modules[f"{self.main.__package__}.core.config"].initialize_config
+            initialize.side_effect = OSError("fixture initialization failed")
+            replies = await self.start()
+        self.assertEqual(len(replies), 1)
+        self.assertIn("初始化失败", replies[0])
+        initialize.assert_called_once_with()
+        bridge.apply_astrbot_config.assert_not_called()
+        factory.assert_not_called()
+        self.cli._release_bot_lock.assert_not_called()
+        self.assertIsNone(self.main._brain_task)
 
     async def test_invalid_panel_configuration_prevents_brain_creation(self):
         self.bot.config = {"use_astrbot_config": True}

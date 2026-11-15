@@ -12,6 +12,9 @@ import os, re, time, json, sys, asyncio, webbrowser, socket, threading
 import httpx
 from pathlib import Path
 
+from .. import _runtime
+from ..utils.display import log, log_exception
+
 
 def _safe_flush(stream) -> None:
     """flush 兜底：windowed 冻结环境下 sys.stdout 可能为 None。"""
@@ -1681,6 +1684,8 @@ def _hex_to_rgb(hex_color: str) -> str:
 # ── 便捷API ──
 async def _heartbeat_dots(interval: float = 2.0):
     """心跳动画：每隔interval秒打印一个点，表示在等待AI响应"""
+    if _runtime.plugin_mode:
+        return
     try:
         while True:
             await asyncio.sleep(interval)
@@ -1691,13 +1696,16 @@ def _find_free_port(start=18800, end=18900) -> int:
     """查找可用端口"""
     for port in range(start, end):
         with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+            s.settimeout(0.2)
             if s.connect_ex(('127.0.0.1', port)) != 0:
                 return port
     return start  # fallback
 
 
 def start_preview_server(html_content: str, port: int = None) -> str:
-    """启动Flask预览服务器，返回访问URL"""
+    """启动独立 CLI 的本地预览服务器，返回访问URL。"""
+    if _runtime.plugin_mode:
+        raise RuntimeError("Local preview is only available in standalone CLI mode")
     global _preview_server, _preview_html, _preview_port
     try:
         from flask import Flask, Response
@@ -1721,9 +1729,6 @@ def start_preview_server(html_content: str, port: int = None) -> str:
         return Response(_preview_html, mimetype='text/html; charset=utf-8')
 
     def _run():
-        import logging
-        log = logging.getLogger('werkzeug')
-        log.setLevel(logging.ERROR)  # 静默Flask日志
         app.run(host='127.0.0.1', port=_preview_port, debug=False, use_reloader=False)
 
     _preview_server = threading.Thread(target=_run, daemon=True)
@@ -1757,13 +1762,9 @@ def save_html_to_path(html_content: str, save_path: str = None) -> str:
     Returns:
         实际保存的完整文件路径
     """
-    if save_path is None:
-        from ..core.user_data import HTML_EXPORTS_DIR
-        default_dir = HTML_EXPORTS_DIR
-        default_dir.mkdir(parents=True, exist_ok=True)
-        save_path = str(default_dir)
+    from ..core.user_data import HTML_EXPORTS_DIR, resolve_output_path
 
-    sp = Path(save_path)
+    sp = resolve_output_path(save_path, HTML_EXPORTS_DIR)
 
     # 如果只给了目录路径，自动生成文件名
     if sp.suffix.lower() != '.html':
@@ -1779,6 +1780,7 @@ def save_html_to_path(html_content: str, save_path: str = None) -> str:
         ts = int(time.time())
         sp = sp.with_name(f"{sp.stem}_{ts}{sp.suffix}")
 
+    sp = resolve_output_path(sp)
     sp.write_text(html_content, encoding='utf-8')
     return str(sp.resolve())
 
@@ -1864,7 +1866,7 @@ async def generate_ppt_from_bvid(
         v_res = await client.get('https://api.bilibili.com/x/web-interface/view', params=wbi_sign({'bvid': bvid}))
         v_data = v_res.json()
         if v_data.get('code') != 0:
-            result["error"] = f"获取视频信息失败: {v_data.get('message','')}"
+            result["error"] = "获取视频信息失败"
             return result
 
         v_info = v_data['data']
@@ -1909,7 +1911,7 @@ async def generate_ppt_from_bvid(
             ok, subtitle_text, video_desc, _ = await fetch_bilibili_subtitles(
                 bvid, cookies_obj=None, title=title)
         if not ok or not subtitle_text:
-            result["error"] = f"字幕获取失败: {subtitle_text}"
+            result["error"] = "字幕获取失败"
             return result
 
         result["subtitle_chars"] = len(subtitle_text)
@@ -1927,8 +1929,7 @@ async def generate_ppt_from_bvid(
     )
     _prompt_chars = len(prompt)
     _prompt_k = _prompt_chars / 1000
-    print(f"\n[PPT] 正在调用AI生成幻灯片... (详情:{_dl_map.get(detail_level, detail_level)}, prompt {_prompt_k:.1f}K字符, 字幕{result['subtitle_chars']:,}字符, 最长等待5分钟)")
-    _safe_flush(sys.stdout)
+    log(f"正在调用AI生成幻灯片 (详情:{_dl_map.get(detail_level, detail_level)}, prompt {_prompt_k:.1f}K字符, 字幕{result['subtitle_chars']:,}字符, 最长等待5分钟)", "PPT")
 
     messages = [{"role": "user", "content": prompt}]
     request_body, request_headers = _utf8_json_request({
@@ -1936,7 +1937,7 @@ async def generate_ppt_from_bvid(
     })
     html_content = ""
     _ai_start = time.time()
-    _heartbeat = asyncio.ensure_future(_heartbeat_dots(2.0))
+    _heartbeat = None if _runtime.plugin_mode else asyncio.create_task(_heartbeat_dots(2.0))
     try:
         async with httpx.AsyncClient(timeout=300.0) as client:
             r = await client.post(
@@ -1946,7 +1947,7 @@ async def generate_ppt_from_bvid(
             )
             _elapsed = time.time() - _ai_start
             if r.status_code >= 400:
-                result["error"] = f"API错误 {r.status_code}: {r.text[:300]}"
+                result["error"] = f"API错误 {r.status_code}"
                 return result
             d = r.json()
             choices = d.get('choices', [])
@@ -1955,19 +1956,22 @@ async def generate_ppt_from_bvid(
                 c = msg.get('content', '')
                 if c:
                     html_content += c
-            print(f"\n[PPT] AI生成完成 ({_elapsed:.1f}秒, {len(html_content):,}字符)")
+            log(f"AI生成完成 ({_elapsed:.1f}秒, {len(html_content):,}字符)", "PPT")
     except httpx.RequestError as exc:
-        result["error"] = f"AI接口连接失败: {exc}"
+        log_exception("幻灯片 AI 接口连接失败", exc)
+        result["error"] = f"AI接口连接失败（{type(exc).__name__}）"
         return result
     except (ValueError, KeyError, TypeError) as exc:
-        result["error"] = f"AI响应格式异常: {exc}"
+        log_exception("幻灯片 AI 响应格式异常", exc)
+        result["error"] = f"AI响应格式异常（{type(exc).__name__}）"
         return result
     finally:
-        _heartbeat.cancel()
-        try:
-            await _heartbeat
-        except asyncio.CancelledError:
-            pass
+        if _heartbeat is not None:
+            _heartbeat.cancel()
+            try:
+                await _heartbeat
+            except asyncio.CancelledError:
+                pass
 
     if not html_content:
         result["error"] = "AI未返回内容"
@@ -1983,7 +1987,7 @@ async def generate_ppt_from_bvid(
 
     generated_slide_count = count_slide_elements(html_content)
     if generated_slide_count != slide_count:
-        print(f"[PPT] 页数验收未通过：要求 {slide_count} 页，实际 {generated_slide_count} 页，正在请求修复...")
+        log(f"页数验收未通过：要求 {slide_count} 页，实际 {generated_slide_count} 页，正在请求修复", "WARN")
         repair_prompt = f"""你刚才生成的幻灯片页数不符合要求。
 目标：严格输出 {slide_count} 个完整的 <div class=\"slide ...\"> 页面，不能少也不能多。
 保留原有真实内容并补齐缺少的独立主题页；不要重复封面，不要写 CSS、JS、Markdown 或解释。
@@ -2015,7 +2019,8 @@ async def generate_ppt_from_bvid(
                 for choice in (repair_response.json().get('choices') or [])
             ).strip()
         except (httpx.RequestError, ValueError, KeyError, TypeError) as exc:
-            result["error"] = f"页数修复失败：{exc}"
+            log_exception("幻灯片页数修复失败", exc)
+            result["error"] = f"页数修复失败（{type(exc).__name__}）"
             return result
         repaired_start = repaired.find('<div class="ppt-container"')
         if repaired_start == -1:
@@ -2031,43 +2036,36 @@ async def generate_ppt_from_bvid(
             return result
         html_content = repaired
         generated_slide_count = repaired_count
-        print(f"[PPT] 页数修复通过：{generated_slide_count}/{slide_count} 页")
+        log(f"页数修复通过：{generated_slide_count}/{slide_count} 页", "PPT")
 
     result["slide_count"] = generated_slide_count
 
     # Step 4: 包装完整HTML
-    print("[PPT] 正在组装HTML页面...")
-    _safe_flush(sys.stdout)
+    log("正在组装HTML页面", "PPT")
     full_html = build_full_html(
         html_content,
         theme,
         enhanced_animations=enhanced_animations,
     )
-    print(f"[PPT] HTML组装完成 ({len(full_html):,}字符)")
+    log(f"HTML组装完成 ({len(full_html):,}字符)", "PPT")
 
     # Step 5: 保存（可选）
     result["html_content"] = full_html
 
     if auto_save:
-        if output_dir is None:
-            from ..core.user_data import HTML_EXPORTS_DIR
-            output_dir = str(HTML_EXPORTS_DIR)
-        os.makedirs(output_dir, exist_ok=True)
+        from ..core.user_data import HTML_EXPORTS_DIR, resolve_output_path
 
+        directory = resolve_output_path(output_dir, HTML_EXPORTS_DIR)
         safe_title = re.sub(r'[\\/*?:"<>|]', '_', title)[:40]
         timestamp = int(time.time())
-        html_path = os.path.join(output_dir, f"{safe_title}_{timestamp}.html")
-
-        with open(html_path, 'w', encoding='utf-8') as f:
-            f.write(full_html)
-
+        html_path = save_html_to_path(full_html, str(directory / f"{safe_title}_{timestamp}.html"))
         result["html_path"] = html_path
-        print(f"[PPT] 已保存: {html_path}")
+        log("幻灯片 HTML 已保存", "PPT")
 
     result["success"] = True
 
-    if open_browser and result.get("html_path"):
-        webbrowser.open(f"file:///{result['html_path'].replace(os.sep, '/')}")
+    if not _runtime.plugin_mode and open_browser and result.get("html_path"):
+        webbrowser.open(Path(result["html_path"]).as_uri())
 
     return result
 

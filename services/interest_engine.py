@@ -93,10 +93,8 @@ ENGINE_CONFIG_FILE = str(DATA_DIR / "interest_engine.json")
 # ── 日志辅助 ──
 def _elog(msg: str, tag: str = "ENGINE"):
     """引擎日志"""
-    from colorama import Fore, Style
-    color_map = {"OK": Fore.GREEN, "INFO": Fore.CYAN, "WARN": Fore.YELLOW, "ERR": Fore.RED}
-    c = color_map.get(tag, Fore.CYAN)
-    print(f"{c}[{tag}]{Style.RESET_ALL} {msg}")
+    from ..utils.display import log
+    log(msg, tag)
 
 
 @dataclass

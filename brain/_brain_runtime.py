@@ -1,5 +1,6 @@
 """brain/_brain_runtime.py — AgentBrain 运行时 & 记忆持久化 mixin"""
 from ._mixin_imports import *
+from ..utils.display import log_exception
 from ..utils.helpers import _load_json_file, _save_json_file
 
 class BrainRuntimeMixin:
@@ -69,7 +70,7 @@ class BrainRuntimeMixin:
                             v["followed"] = False
                 return data
             except (OSError, json.JSONDecodeError) as e:
-                log(f'加载JSON文件失败: {e}', 'DEBUG')
+                log_exception("加载运行记忆失败", e)
         return {"known_ups": {}, "history": []}
     
     def _save_memory_to_disk(self, data=None):
@@ -81,7 +82,7 @@ class BrainRuntimeMixin:
                 json.dump(data, f, ensure_ascii=False, indent=2)
             os.replace(tmp, MEMORY_FILE)
         except OSError as e:
-            log(f'文件操作失败: {e}', 'DEBUG')
+            log_exception("保存运行记忆失败", e)
 
     def _save_memory(self):
         self._save_memory_to_disk(self.memory)

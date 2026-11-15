@@ -19,15 +19,15 @@ AstrBot 通过 metadata.yaml 自动识别本插件，无需 @register 装饰器�
 2. CLI 菜单是同步且交互式的，只在真正的终端（sys.stdin.isatty()）里执行，并且放到
    线程中运行，避免阻塞事件循环。
 3. 长时间运行的 AgentBrain.run() 改为后台任务，指令立即返回，并可用 /bili_stop 停止。
-4. 异常日志统一附带 traceback，便于排查。
+4. 异常日志保留类型和调用帧，不输出原响应或异常中的凭据。
 """
 from __future__ import annotations
 
 import asyncio
 import sys
-import traceback
 from importlib import metadata as importlib_metadata
 
+_standalone_entry = not __package__ or __name__ == "__main__"
 if not __package__:
     import hashlib
     import importlib.util
@@ -47,6 +47,11 @@ if not __package__:
 from astrbot.api import logger
 from astrbot.api.event import AstrMessageEvent, filter
 from astrbot.api.star import Context, Star
+
+from . import _runtime
+
+if _standalone_entry:
+    _runtime.configure_standalone()
 
 # 插件版本的代码侧唯一来源，必须与 metadata.yaml 的 version 保持一致。
 # 其它位置（CLI 横幅、文档、依赖清单）不再硬编码版本号，升级时只改这里和
@@ -151,6 +156,8 @@ def _is_interactive() -> bool:
     Returns:
         bool: stdin 是 TTY 时返回 True，否则返回 False（Docker / 远程会话）。
     """
+    if _runtime.plugin_mode:
+        return False
     try:
         return bool(sys.stdin and sys.stdin.isatty())
     except (AttributeError, OSError, ValueError):
@@ -158,13 +165,14 @@ def _is_interactive() -> bool:
 
 
 def _log_exception(action: str, exc: BaseException) -> None:
-    """记录异常并附带完整堆栈。
+    """记录异常类型及安全调用帧，不输出异常正文。
 
     Args:
         action: 当前执行的动作，用于日志前缀。
         exc: 捕获到的异常。
     """
-    logger.error(f"{action}失败: {exc}\n{traceback.format_exc()}")
+    from .utils.display import log_exception
+    log_exception(f"{action}失败", exc)
 
 
 def _on_brain_done(task: asyncio.Task) -> None:
@@ -190,10 +198,7 @@ def _on_brain_done(task: asyncio.Task) -> None:
         return
     exc = task.exception()
     if exc is not None:
-        logger.error(
-            f"B站学习机器人后台任务异常退出: {exc}\n"
-            + "".join(traceback.format_exception(type(exc), exc, exc.__traceback__))
-        )
+        _log_exception("B站学习机器人后台任务异常退出", exc)
 
 
 class BilibiliLearningBot(Star):
@@ -202,6 +207,10 @@ class BilibiliLearningBot(Star):
 
     def __init__(self, context: Context, config=None):
         super().__init__(context)
+        if not _standalone_entry:
+            from astrbot.api.star import StarTools
+
+            _runtime.configure_plugin(StarTools.get_data_dir(_runtime.PLUGIN_NAME))
         self.config = config
 
     @staticmethod
@@ -243,6 +252,9 @@ class BilibiliLearningBot(Star):
                 return
 
             try:
+                from .core.config import initialize_config
+
+                initialize_config()
                 if self.config is not None:
                     from .core.astrbot_config_bridge import apply_astrbot_config
 
@@ -252,7 +264,7 @@ class BilibiliLearningBot(Star):
                 brain = AgentBrain()
             except Exception as exc:
                 _log_exception("初始化机器人", exc)
-                yield event.plain_result(f"❌ 机器人初始化失败: {exc}")
+                yield event.plain_result(f"❌ 机器人初始化失败（{type(exc).__name__}，详情见日志）")
                 return
 
             _brain_task = asyncio.create_task(brain.run(), name="bili_learning_brain")
@@ -324,7 +336,7 @@ class BilibiliLearningBot(Star):
             await self._run_in_thread(_cli_app().show_login_menu)
         except Exception as exc:
             _log_exception("B站登录", exc)
-            yield event.plain_result(f"❌ 登录失败: {exc}")
+            yield event.plain_result(f"❌ 登录失败（{type(exc).__name__}，详情见日志）")
             return
         yield event.plain_result("✅ 登录流程已结束，请查看后台日志确认结果。")
 
@@ -364,31 +376,37 @@ class BilibiliLearningBot(Star):
             yield event.plain_result("\n".join(lines))
         except Exception as exc:
             _log_exception("读取知识库列表", exc)
-            yield event.plain_result(f"❌ 读取知识库列表失败: {exc}")
+            yield event.plain_result(f"❌ 读取知识库列表失败（{type(exc).__name__}，详情见日志）")
 
     @filter.command("bili_kb_revisit")
     async def kb_revisit(self, event: AstrMessageEvent):
-        """重温知识库。"""
+        """重温知识库（需要终端确认）。"""
+        if not _is_interactive():
+            yield event.plain_result("ℹ️ 知识库重温需要交互选择，请在独立 CLI 的知识库菜单中操作。")
+            return
         try:
             from .knowledge.revisit import revisit_knowledge_base_menu
 
             await revisit_knowledge_base_menu()
         except Exception as exc:
             _log_exception("知识库重温", exc)
-            yield event.plain_result(f"❌ 知识库重温失败: {exc}")
+            yield event.plain_result(f"❌ 知识库重温失败（{type(exc).__name__}，详情见日志）")
             return
         yield event.plain_result("✅ 知识库重温完成")
 
     @filter.command("bili_kb_organize")
     async def kb_organize(self, event: AstrMessageEvent):
-        """整理知识库。"""
+        """整理知识库（需要终端确认）。"""
+        if not _is_interactive():
+            yield event.plain_result("ℹ️ 知识库整理需要确认变更，请在独立 CLI 的知识库菜单中操作。")
+            return
         try:
             from .knowledge.organize import organize_knowledge_base
 
             await organize_knowledge_base()
         except Exception as exc:
             _log_exception("知识库整理", exc)
-            yield event.plain_result(f"❌ 知识库整理失败: {exc}")
+            yield event.plain_result(f"❌ 知识库整理失败（{type(exc).__name__}，详情见日志）")
             return
         yield event.plain_result("✅ 知识库整理完成")
 
@@ -406,7 +424,7 @@ class BilibiliLearningBot(Star):
             await self._run_in_thread(custom_knowledge_menu)
         except Exception as exc:
             _log_exception("自定义知识管理", exc)
-            yield event.plain_result(f"❌ 自定义知识管理失败: {exc}")
+            yield event.plain_result(f"❌ 自定义知识管理失败（{type(exc).__name__}，详情见日志）")
             return
         yield event.plain_result("✅ 自定义知识管理完成")
 
@@ -426,12 +444,15 @@ class BilibiliLearningBot(Star):
             return
 
         try:
+            from .core.config import initialize_config
+
+            initialize_config()
             from .brain.video_analysis import analyze_bilibili_video_input
 
             await analyze_bilibili_video_input(bvid)
         except Exception as exc:
             _log_exception("视频分析", exc)
-            yield event.plain_result(f"❌ 视频分析失败: {exc}")
+            yield event.plain_result(f"❌ 视频分析失败（{type(exc).__name__}，详情见日志）")
             return
         yield event.plain_result(f"✅ 视频分析完成：{bvid}")
 
@@ -449,6 +470,9 @@ class BilibiliLearningBot(Star):
             return
 
         try:
+            from .core.config import initialize_config
+
+            initialize_config()
             from .brain.video_analysis import up_homepage_learn
 
             # 非交互调用：显式给出默认值，避免函数内部三个 input() 阻塞事件循环
@@ -460,7 +484,7 @@ class BilibiliLearningBot(Star):
             )
         except Exception as exc:
             _log_exception("UP主学习", exc)
-            yield event.plain_result(f"❌ UP主学习失败: {exc}")
+            yield event.plain_result(f"❌ UP主学习失败（{type(exc).__name__}，详情见日志）")
             return
         yield event.plain_result(f"✅ UP主学习完成：{up_id}")
 
@@ -471,18 +495,21 @@ class BilibiliLearningBot(Star):
         用法：/bili_video2html [bvid]
         """
         try:
-            from .cli.app import video_to_html_bg
-
             bvid = (bvid or "").strip()
             if not bvid:
                 yield event.plain_result(
                     "ℹ️ 用法：/bili_video2html <bv号/链接>\n例如：/bili_video2html BV1xx411c7mD"
                 )
                 return
+            from .core.config import initialize_config
+
+            initialize_config()
+            from .cli.app import video_to_html_bg
+
             await video_to_html_bg(query=bvid)
         except Exception as exc:
             _log_exception("视频转HTML", exc)
-            yield event.plain_result(f"❌ 视频转HTML失败: {exc}")
+            yield event.plain_result(f"❌ 视频转HTML失败（{type(exc).__name__}，详情见日志）")
             return
         yield event.plain_result("✅ 视频转HTML完成")
 
@@ -517,7 +544,7 @@ class BilibiliLearningBot(Star):
             yield event.plain_result(f"✅ {label}: {state}")
         except Exception as exc:
             _log_exception(f"切换{label}", exc)
-            yield event.plain_result(f"❌ 切换{label}失败: {exc}")
+            yield event.plain_result(f"❌ 切换{label}失败（{type(exc).__name__}，详情见日志）")
 
     @filter.command("bili_asr")
     async def toggle_asr(self, event: AstrMessageEvent):
@@ -558,7 +585,7 @@ class BilibiliLearningBot(Star):
             yield event.plain_result(f"✅ 快速模式: {state}")
         except Exception as exc:
             _log_exception("切换快速模式", exc)
-            yield event.plain_result(f"❌ 切换快速模式失败: {exc}")
+            yield event.plain_result(f"❌ 切换快速模式失败（{type(exc).__name__}，详情见日志）")
 
     # ==================== 其他功能 ====================
 
@@ -575,7 +602,7 @@ class BilibiliLearningBot(Star):
             await self._run_in_thread(_cli_app().show_interest_menu)
         except Exception as exc:
             _log_exception("兴趣设置", exc)
-            yield event.plain_result(f"❌ 兴趣设置失败: {exc}")
+            yield event.plain_result(f"❌ 兴趣设置失败（{type(exc).__name__}，详情见日志）")
             return
         yield event.plain_result("✅ 兴趣设置流程已结束，请查看后台日志确认结果。")
 
@@ -592,7 +619,7 @@ class BilibiliLearningBot(Star):
             await self._run_in_thread(_cli_app().show_comment_menu)
         except Exception as exc:
             _log_exception("评论设置", exc)
-            yield event.plain_result(f"❌ 评论设置失败: {exc}")
+            yield event.plain_result(f"❌ 评论设置失败（{type(exc).__name__}，详情见日志）")
             return
         yield event.plain_result("✅ 评论设置流程已结束，请查看后台日志确认结果。")
 
@@ -608,7 +635,7 @@ class BilibiliLearningBot(Star):
             await self._run_in_thread(_cli_app().export_config)
         except Exception as exc:
             _log_exception("导出配置", exc)
-            yield event.plain_result(f"❌ 导出配置失败: {exc}")
+            yield event.plain_result(f"❌ 导出配置失败（{type(exc).__name__}，详情见日志）")
             return
         yield event.plain_result("✅ 配置已导出")
 
@@ -624,7 +651,7 @@ class BilibiliLearningBot(Star):
             await self._run_in_thread(_cli_app().import_config)
         except Exception as exc:
             _log_exception("导入配置", exc)
-            yield event.plain_result(f"❌ 导入配置失败: {exc}")
+            yield event.plain_result(f"❌ 导入配置失败（{type(exc).__name__}，详情见日志）")
             return
         yield event.plain_result("✅ 配置已导入")
 
@@ -640,7 +667,7 @@ class BilibiliLearningBot(Star):
             await self._run_in_thread(_cli_app().factory_reset_all)
         except Exception as exc:
             _log_exception("恢复出厂设置", exc)
-            yield event.plain_result(f"❌ 恢复出厂设置失败: {exc}")
+            yield event.plain_result(f"❌ 恢复出厂设置失败（{type(exc).__name__}，详情见日志）")
             return
         yield event.plain_result("✅ 已恢复出厂设置")
 
@@ -652,7 +679,7 @@ class BilibiliLearningBot(Star):
             app._show_bg_tasks()
         except Exception as exc:
             _log_exception("查看后台任务", exc)
-            yield event.plain_result(f"❌ 查看后台任务失败: {exc}")
+            yield event.plain_result(f"❌ 查看后台任务失败（{type(exc).__name__}，详情见日志）")
             return
         state = "运行中" if _brain_task and not _brain_task.done() else "未运行"
         yield event.plain_result(f"机器人主循环: {state}，后台任务详情见日志。")
@@ -666,7 +693,24 @@ def _run_cli_main() -> None:
     因此 main.py 在被 AstrBot 加载时仅需导出 class BilibiliLearningBot(Star)；
     本函数仅用于 CLI / 桌面 / 测试场景。
     """
-    import logging as _logging
+    if _runtime.plugin_mode:
+        raise RuntimeError("Interactive CLI is not available inside the AstrBot plugin")
+    if "--migrate-data" in sys.argv[1:]:
+        import argparse
+
+        parser = argparse.ArgumentParser(description="单向导入明确选定的旧数据目录")
+        parser.add_argument("--migrate-data", required=True, metavar="SOURCE")
+        args = parser.parse_args()
+        try:
+            from .core.user_data import migrate_legacy_data
+            from .utils.display import log
+
+            copied = migrate_legacy_data(args.migrate_data)
+            log(f"旧数据导入完成，新增 {len(copied)} 个文件；未覆盖目标或删除源文件", "INFO")
+        except Exception as exc:
+            _log_exception("旧数据导入", exc)
+            raise SystemExit(1) from None
+        return
 
     # 与 CLI 入口行为保持一致：先打印免责声明，再走主菜单。
     # 非 TTY（管道/重定向/Docker）下读 stdin 会阻塞或直接 EOF，跳过确认。
@@ -682,9 +726,8 @@ def _run_cli_main() -> None:
         except (KeyboardInterrupt, EOFError):
             print("\n[EXIT] 已取消，程序已退出")
             return
-        except Exception as _exc:
-            _logging.getLogger(__name__).exception("主菜单运行异常: %s", _exc)
-            print(f"[ERROR] 主菜单运行异常: {_exc}")
+        except Exception as exc:
+            _log_exception("主菜单运行", exc)
             return
 
 

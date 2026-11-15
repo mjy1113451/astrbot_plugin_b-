@@ -25,8 +25,11 @@ from datetime import datetime
 
 from colorama import Fore, Style
 
+from .. import _runtime
+from ..utils.display import log, log_exception
+
 BASE_DIR = Path(__file__).resolve().parent.parent
-from ..core.user_data import DATA_DIR, HTML_EXPORTS_DIR
+from ..core.user_data import DATA_DIR, HTML_EXPORTS_DIR, managed_file_path
 from ..core.config import config as _core_config, resolve_knowledge_base_dir
 
 KNOWLEDGE_BASE_DIR = Path(resolve_knowledge_base_dir(_core_config))
@@ -39,7 +42,7 @@ from ._services_ai import call_ai, _live_config
 
 
 def _load_bili_cookies() -> dict:
-    cookie_file = DATA_DIR / "bilibili_cookies.json"
+    cookie_file = managed_file_path(DATA_DIR / "bilibili_cookies.json")
     if cookie_file.exists():
         try:
             with open(cookie_file, 'r', encoding='utf-8') as f:
@@ -249,7 +252,7 @@ async def run_deep_dive(
     videos_watched = 0
 
     # ── Step 1: AI 生成搜索策略 ──
-    print(f"{Fore.CYAN}[DEEP DIVE] 正在分析主题: {topic}{Style.RESET_ALL}")
+    log("[DEEP DIVE] 正在分析学习主题", "INFO")
 
     strategy_prompt = f"""你是一个学习助手。用户想深入了解以下主题："{topic}"
 {f'补充说明：{additional_context}' if additional_context else ''}
@@ -272,7 +275,7 @@ async def run_deep_dive(
     except Exception:
         keywords = [topic]
 
-    print(f"{Fore.GREEN}[DEEP DIVE] 搜索关键词: {', '.join(keywords)}{Style.RESET_ALL}")
+    log(f"[DEEP DIVE] 已生成 {len(keywords)} 个搜索关键词", "INFO")
 
     # ── Step 2: 执行搜索 ──
     if mode == "bilibili":
@@ -293,20 +296,23 @@ async def run_deep_dive(
         result["shortage"] = len(total_videos) < video_count
         if result["shortage"]:
             msg = f"[DEEP DIVE] 你要求 {video_count} 个视频，但只找到 {len(total_videos)} 个可用视频。"
-            print(f"{Fore.YELLOW}{msg}{Style.RESET_ALL}")
+            log(msg, "WARN")
             if shortage_policy == "stop":
                 result["error"] = msg + " 已停止；请减少数量、换关键词，或改用联网搜索模式。"
                 return result
             if shortage_policy == "ask":
+                if _runtime.plugin_mode:
+                    result["error"] = msg + " 插件模式无法交互确认；请明确选择继续或停止策略。"
+                    return result
                 loop = asyncio.get_running_loop()
                 ans = await loop.run_in_executor(None, input, f"{Fore.CYAN}是否继续学习这 {len(total_videos)} 个？(Y/n): {Style.RESET_ALL}")
                 if ans.strip().lower() in {"n", "no", "0"}:
                     result["error"] = "用户取消：搜索结果数量不足。"
                     return result
-        print(f"{Fore.GREEN}[DEEP DIVE] 找到 {len(total_videos)} 个视频{Style.RESET_ALL}")
+        log(f"[DEEP DIVE] 找到 {len(total_videos)} 个视频", "INFO")
 
         for i, video in enumerate(total_videos):
-            print(f"{Fore.CYAN}[DEEP DIVE] 正在学习视频 {i+1}/{len(total_videos)}: {video['title'][:50]}...{Style.RESET_ALL}")
+            log(f"[DEEP DIVE] 正在学习视频 {i+1}/{len(total_videos)}", "INFO")
             subtitles = await _fetch_video_subtitles_simple(video['bvid'])
 
             source_info = {
@@ -339,7 +345,7 @@ async def run_deep_dive(
             all_search_results.extend(search_results)
 
         all_search_results = all_search_results[:max(video_count, 15)]
-        print(f"{Fore.GREEN}[DEEP DIVE] 搜索到 {len(all_search_results)} 个网页结果{Style.RESET_ALL}")
+        log(f"[DEEP DIVE] 搜索到 {len(all_search_results)} 个网页结果", "INFO")
 
         for sr in all_search_results:
             source_info = {
@@ -354,7 +360,7 @@ async def run_deep_dive(
             )
 
     # ── Step 3: AI 综合总结 ──
-    print(f"{Fore.GREEN}[DEEP DIVE] 正在生成综合报告...{Style.RESET_ALL}")
+    log("[DEEP DIVE] 正在生成综合报告", "INFO")
 
     content_text = '\n\n'.join(collected_content)
     if len(content_text) > 20000:
@@ -389,7 +395,8 @@ async def run_deep_dive(
             timeout=180,
         )
     except Exception as e:
-        result["error"] = f"AI 生成报告失败: {e}"
+        log_exception("AI 生成深入学习报告失败", e)
+        result["error"] = "AI 生成报告失败，请查看安全诊断日志。"
         return result
 
     # ── Step 4: 保存 ──
@@ -442,7 +449,8 @@ async def run_deep_dive(
         try:
             extra_paths = export_deep_dive_file(saved_path, export_formats)
         except Exception as e:
-            extra_paths = {"error": str(e)}
+            log_exception("深入学习报告附加导出失败", e)
+            extra_paths = {"error": "附加导出失败，请查看安全诊断日志。"}
 
     result["success"] = True
     result["report"] = report
@@ -458,7 +466,7 @@ async def run_deep_dive(
         kb_dir.mkdir(parents=True, exist_ok=True)
         kb_file = kb_dir / filename
         kb_file.write_text(full_content, encoding='utf-8')
-        print(f"{Fore.GREEN}[DEEP DIVE] 已归档至知识库: {kb_file}{Style.RESET_ALL}")
+        log("[DEEP DIVE] 已归档至知识库", "SUCCESS")
     except Exception:
         pass
 
@@ -520,6 +528,9 @@ async def run_deep_research(
 
 async def deep_research_menu_cli():
     """CLI 深研计划入口。"""
+    if _runtime.plugin_mode:
+        log("插件模式不提供交互式深研菜单", "WARN")
+        return
     print(f"\n{Fore.CYAN}{'=' * 60}")
     print("  🔎 深研计划 — 多来源证据链研究")
     print(f"{'=' * 60}{Style.RESET_ALL}")
@@ -556,6 +567,9 @@ async def deep_research_menu_cli():
 # ── CLI 菜单函数 ──
 async def deep_dive_menu_cli():
     """CLI 深入了解菜单"""
+    if _runtime.plugin_mode:
+        log("插件模式不提供交互式深入学习菜单", "WARN")
+        return
     print(f"\n{Fore.CYAN}{'='*50}")
     print("  🔬 深入了解 — AI 深度学习助手")
     print(f"{'='*50}{Style.RESET_ALL}")
@@ -664,6 +678,9 @@ async def deep_dive_menu_cli():
 
 def export_deep_dive_menu_cli():
     """CLI：把已保存的深入学习 Markdown 再导出为其他格式。"""
+    if _runtime.plugin_mode:
+        log("插件模式不提供交互式报告导出菜单", "WARN")
+        return
     candidates = []
     for root in [REPORT_EXPORT_DIR, KNOWLEDGE_BASE_DIR / "深入学习"]:
         if root.exists():

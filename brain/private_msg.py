@@ -23,7 +23,7 @@ BEHAVIOR_MAX_CONSECUTIVE_AI_REPLIES = config.get("behavior", {}).get("max_consec
 from ..persona.managers import PersonaManager, MoodManager, UserProfileManager, PrivateContextDB
 from ..security.guard import ReplySafetyGuard
 from ..services.utils import BiliToolbox
-from ..utils.display import log
+from ..utils.display import log, log_exception
 from datetime import datetime
 from ..utils.helpers import _mask_urls, parse_iso_datetime, human_reply_delay, ensure_ai_marker
 def is_api_configured():
@@ -99,7 +99,7 @@ class PrivateMessageManager:
                 with open(PRIVATE_MESSAGE_LOG_FILE, 'r', encoding='utf-8') as f:
                     return json.load(f)
             except (OSError, json.JSONDecodeError) as e:
-                log(f"[WARN] 私信日志加载失败: {e}", "WARN")
+                log_exception("私信日志加载失败", e)
         return {"processed_msg_ids": [], "history": []}
 
     def _save_log(self):
@@ -110,7 +110,7 @@ class PrivateMessageManager:
                 json.dump(self.log_data, f, ensure_ascii=False, indent=2)
             os.replace(tmp, PRIVATE_MESSAGE_LOG_FILE)
         except Exception as e:
-            log(f"保存私信日志失败: {e}", "WARN")
+            log_exception("保存私信日志失败", e)
 
     def _mark_processed(self, msg_id):
         self.processed_msg_ids.add(str(msg_id))
@@ -305,7 +305,7 @@ class PrivateMessageManager:
             sessions = await bili_session.get_sessions(self.credential, session_type=1)
             session_list = sessions.get("session_list") or sessions.get("data", {}).get("session_list", [])
         except Exception as e:
-            log(f"获取主动聊天目标失败: {e}", "WARN")
+            log_exception("获取主动聊天目标失败", e)
             return None
 
         candidates = []
@@ -375,10 +375,10 @@ class PrivateMessageManager:
             )
             description = str(description or "").strip()[:240]
             if description:
-                log(f"[EYE] 私信图片已理解 @{message_data.get('talker_id')}: {description}", "EYE")
+                log("[EYE] 私信图片理解完成", "EYE")
                 return description
         except Exception as exc:
-            log(f"[EYE] 私信图片分析不可用 @{message_data.get('talker_id')}: {exc}", "WARN")
+            log_exception("[EYE] 私信图片分析不可用", exc)
         return "用户发送了一张图片；当前视觉接口未能取得可靠描述。"
 
     @staticmethod
@@ -418,7 +418,7 @@ class PrivateMessageManager:
                 include_dynamics=agent_cfg.get("sender_dynamics_enabled", True) is not False,
             )
         except Exception as exc:
-            log(f"读取私信用户公开资料失败 @{message_data.get('talker_id')}: {exc}", "WARN")
+            log_exception("读取私信用户公开资料失败", exc)
             return cached if isinstance(cached, dict) else {}
         if isinstance(public_context, dict) and not public_context.get("error"):
             self.context_db.update_profile(
@@ -468,7 +468,7 @@ class PrivateMessageManager:
         await self._send_video_inspection_progress(message_data, tool_plan, context_block)
         tool_results = await self.toolbox.run_plan(tool_plan, message_data.get("content", ""), message_data.get("talker_id"))
         if tool_results:
-            log(f"[Agent] 私信工具调用完成 @{message_data.get('talker_id')}: {', '.join(tool_results.keys())}", "BRAIN")
+            log("[Agent] 私信工具调用完成", "BRAIN")
         inspection = self._video_inspection_status(tool_results)
         inspection_note = self._video_inspection_prompt_note(inspection)
         prompt = f"""
@@ -613,9 +613,9 @@ UID: {message_data.get('talker_id')}
             if isinstance(result, dict) and result.get("queued"):
                 log(f"[Agent] 视频阅读进度已进入审核队列 @{message_data.get('talker_id')}", "INFO")
             elif isinstance(result, dict) and result.get("sent") is False:
-                log(f"[Agent] 视频阅读进度未发送 @{message_data.get('talker_id')}: {result.get('message', '')}", "WARN")
+                log("[Agent] 视频阅读进度未发送", "WARN")
         except Exception as exc:
-            log(f"[Agent] 视频阅读进度发送失败，继续处理内容 @{message_data.get('talker_id')}: {exc}", "WARN")
+            log_exception("[Agent] 视频阅读进度发送失败，继续处理内容", exc)
 
     async def plan_tools_for_message(self, message_data, context_block):
         text = message_data.get("content", "")
@@ -708,7 +708,7 @@ UID: {message_data.get('talker_id')}
                         merged[key] = value or merged.get(key, "")
                 return merged
         except Exception as e:
-            log(f"私信工具规划失败，使用关键词规则: {e}", "WARN")
+            log_exception("私信工具规划失败，使用关键词规则", e)
         return heuristic
 
     def _heuristic_tool_plan(self, text, context_block=""):
@@ -994,7 +994,7 @@ UID: {message_data.get('talker_id')}
             try:
                 msg = await self._coalesce_incoming_burst(msg)
                 sender_label = str(msg.get("sender_name") or msg["talker_id"])
-                log(f"收到私信 @{sender_label} ({msg['talker_id']}): {msg['content'][:60]}", "DM")
+                log("收到新私信", "DM")
                 log(f"[监听] 私信已接收，开始安全检查 @{msg['talker_id']}", "DM")
                 if msg.get("image_urls"):
                     log(f"正在理解私信图片 @{msg['talker_id']}...", "EYE")
@@ -1090,11 +1090,11 @@ UID: {message_data.get('talker_id')}
                             entry["send_error"] = result.get("message", "平台未接受该私信")
                             code = result.get("code")
                             suffix = f" (代码 {code})" if code not in (None, "") else ""
-                            log(f"私信第 {index + 1} 段未发送 @{msg['talker_id']}: {entry['send_error']}{suffix}", "WARN")
+                            log(f"私信第 {index + 1} 段未发送，平台未接受操作", "WARN")
                             break
                         else:
                             sent_messages.append(part)
-                            log(f"已发送私信第 {index + 1}/{len(reply_messages)} 段 @{msg['talker_id']}: {part[:60]}", "SUCCESS")
+                            log(f"已发送私信第 {index + 1}/{len(reply_messages)} 段", "SUCCESS")
                         if index + 1 < len(reply_messages):
                             await asyncio.sleep(random.uniform(2.0, 5.0))
                     entry["send_results"] = send_results
@@ -1103,7 +1103,7 @@ UID: {message_data.get('talker_id')}
                     entry["queued"] = bool(queued_messages)
                     entry["sent"] = len(sent_messages) == len(reply_messages)
                 else:
-                    log(f"私信AI拟回复(未发送) @{msg['talker_id']}: {reply[:80]}", "DM")
+                    log("私信AI拟回复已生成(未发送)", "DM")
 
                 self.log_data.setdefault("history", []).append(entry)
                 delivered_messages = entry.get("sent_messages", [])
@@ -1136,7 +1136,7 @@ UID: {message_data.get('talker_id')}
                 processed += 1
                 await asyncio.sleep(random.uniform(10, 25))
             except Exception as e:
-                log(f"处理私信失败: {e}", "ERROR")
+                log_exception("处理私信失败", e)
                 self._mark_message_bundle_processed(msg)
 
         self.last_check_time = datetime.now()

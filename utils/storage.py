@@ -43,8 +43,8 @@ class JsonStore:
                 if self._path.exists():
                     return json.loads(self._path.read_text(encoding="utf-8"))
             except (json.JSONDecodeError, OSError, UnicodeDecodeError) as e:
-                import sys
-                print(f"[JSON] 读取失败 {self._path.name}: {e}", file=sys.stderr, flush=True)
+                from .display import log_exception
+                log_exception("读取 JSON 失败", e)
         return default if default is not None else {}
 
     def write(self, data: Any) -> bool:
@@ -57,8 +57,8 @@ class JsonStore:
                 tmp.replace(self._path)
                 return True
             except Exception as e:
-                import sys
-                print(f"[JSON] 写入失败 {self._path.name}: {e}", file=sys.stderr, flush=True)
+                from .display import log_exception
+                log_exception("写入 JSON 失败", e)
                 return False
 
     def update(self, mutator) -> bool:
@@ -75,8 +75,8 @@ class JsonStore:
             try:
                 mutator(data)
             except Exception as e:
-                import sys
-                print(f"[JSON] update 回调异常 {self._path.name}: {e}", file=sys.stderr, flush=True)
+                from .display import log_exception
+                log_exception("更新 JSON 回调失败", e)
                 return False
             try:
                 self._path.parent.mkdir(parents=True, exist_ok=True)
@@ -85,8 +85,8 @@ class JsonStore:
                 tmp.replace(self._path)
                 return True
             except Exception as e:
-                import sys
-                print(f"[JSON] update 写入失败 {self._path.name}: {e}", file=sys.stderr, flush=True)
+                from .display import log_exception
+                log_exception("更新 JSON 写入失败", e)
                 return False
 
     def stat(self) -> dict:
@@ -198,19 +198,6 @@ def is_safe_path(filepath: Path | str, base_dir: Path | str) -> bool:
 
 # ── 平台无关备份目录 ──
 def get_backup_dir() -> Path:
-    """获取平台无关的备份目录。
-    Windows → C:\\bilibili_claw_backup
-    Android/Termux → /storage/emulated/0/bilibili_claw_backup (共享存储，文件管理器可见)
-    其他 → ~/bilibili_claw_backup
-    """
-    import sys
-    custom_dir = os.getenv("BILI_BACKUP_DIR", "").strip()
-    if custom_dir:
-        return Path(custom_dir).expanduser()
-    if sys.platform == 'win32':
-        return Path.home() / "bilibili_claw_backup"
-    # Android (Termux) 检测：使用共享存储，方便文件管理器访问/跨实例迁移
-    android_storage = Path("/storage/emulated/0")
-    if android_storage.exists():
-        return android_storage / "bilibili_claw_backup"
-    return Path.home() / "bilibili_claw_backup"
+    """Return backups inside the selected user-data profile on every platform."""
+    from ..core.user_data import resolve_output_path
+    return resolve_output_path("backups")
