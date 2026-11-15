@@ -17,11 +17,86 @@ import asyncio
 import ast
 import inspect
 import re
-import traceback
-from datetime import datetime
+from contextlib import AsyncExitStack, asynccontextmanager
 from typing import Any
 
-from colorama import Fore, Style
+from ..utils.display import log
+
+
+def _safe_ai_error(error: Exception) -> str:
+    """Only exception type/status may reach diagnostics or user-facing errors."""
+    if isinstance(error, _AIRequestError):
+        return str(error)
+    status = getattr(error, "status_code", None)
+    if status is None:
+        status = getattr(getattr(error, "response", None), "status_code", None)
+    name = type(error).__name__
+    return f"{name} (HTTP {status})" if isinstance(status, int) else name
+
+
+def _ai_retry_text(error: Exception) -> str:
+    """Keep provider-specific retry classification without displaying its text."""
+    if isinstance(error, _AIRequestError):
+        return " ".join(error._retry_markers) + " " + str(error).lower()
+    text = str(error)
+    try:
+        text += " " + error.response.text
+    except (AttributeError, TypeError, RuntimeError):
+        pass
+    return (text + " " + _safe_ai_error(error)).lower()
+
+
+_RETRY_MARKERS = (
+    "plugin_error", "empty response after retry", "rate limit reached", "429",
+    "too many requests", "http 402", "insufficient balance", "insufficient quota",
+    "quota exceeded", "api key 未配置", "all connection attempts failed",
+    "connection refused", "actively refused", "failed to establish a new connection",
+    "model_not_found", "无可用渠道", "model is not found", "unsupported model",
+)
+
+
+class _AIRequestError(RuntimeError):
+    """Safe public error; retain only fixed markers needed by retry policy."""
+    def __init__(self, error: Exception):
+        super().__init__(_safe_ai_error(error))
+        status = getattr(error, "status_code", None)
+        if status is None:
+            status = getattr(getattr(error, "response", None), "status_code", None)
+        self.status_code = status if isinstance(status, int) else None
+        text = _ai_retry_text(error)
+        self._retry_markers = tuple(marker for marker in _RETRY_MARKERS if marker in text)
+
+
+@asynccontextmanager
+async def _openai_client(live: dict, timeout: float, *, use_sdk_retries: bool = False):
+    """Close both SDK and proxy transport, including construction/cancellation failures."""
+    from openai import AsyncOpenAI
+    import httpx
+
+    proxy_url = ""
+    try:
+        from .proxy_config import get_proxy_url
+        proxy_url = get_proxy_url()
+    except Exception:
+        pass
+
+    try:
+        async with AsyncExitStack() as stack:
+            http_client = None
+            if proxy_url:
+                http_client = await stack.enter_async_context(httpx.AsyncClient(proxy=proxy_url))
+            options = {
+                "api_key": live.get("api_key", ""),
+                "base_url": live.get("base_url", ""),
+                "timeout": float(timeout),
+                "http_client": http_client,
+            }
+            if not use_sdk_retries:
+                options["max_retries"] = 0
+            client = await stack.enter_async_context(AsyncOpenAI(**options))
+            yield client
+    except Exception as exc:
+        raise _AIRequestError(exc) from None
 
 
 def _extract_text_tool_call(content: str, allowed_names: set[str]) -> tuple[str, dict] | None:
@@ -69,22 +144,12 @@ def _extract_text_tool_call(content: str, allowed_names: set[str]) -> tuple[str,
 _ai_429_cooldown_until = 0.0
 
 def _is_fast_fail_error(error: Exception) -> bool:
-    text = str(error).lower()
+    text = _ai_retry_text(error)
     return any(marker in text for marker in (
-        "plugin_error",
-        "empty response after retry",
-        "rate limit reached",
-        "429",
-        "too many requests",
-        "http 402",
-        "insufficient balance",
-        "insufficient quota",
-        "quota exceeded",
-        "api key 未配置",
-        "all connection attempts failed",
-        "connection refused",
-        "actively refused",
-        "failed to establish a new connection",
+        "plugin_error", "empty response after retry", "rate limit reached", "429",
+        "too many requests", "http 402", "insufficient balance", "insufficient quota",
+        "quota exceeded", "api key 未配置", "all connection attempts failed",
+        "connection refused", "actively refused", "failed to establish a new connection",
     ))
 
 
@@ -130,8 +195,7 @@ async def _call_ai_via_openai(
     tools: list[dict] | None = None,
     tool_choice: str = "auto",
 ) -> Any:
-    """通过 openai 库调用（主通道）。"""
-    from openai import OpenAI
+    """通过异步 openai SDK 调用（主通道）。"""
 
     live = _live_config()
     api_key = live.get("api_key", "")
@@ -141,25 +205,8 @@ async def _call_ai_via_openai(
     if not api_key:
         raise RuntimeError("API Key 未配置")
     if not base_url or "://" not in str(base_url):
-        raise RuntimeError(f"API地址无效: '{base_url}'")
+        raise RuntimeError("API地址无效，请在配置菜单中设置有效的API地址")
 
-    # 代理支持：读取 network.proxy 配置
-    import httpx as _httpx
-    _proxy_url = ""
-    try:
-        from .proxy_config import get_proxy_url
-        _proxy_url = get_proxy_url()
-    except Exception:
-        pass
-    _http_client = _httpx.Client(proxy=_proxy_url) if _proxy_url else None
-
-    client = OpenAI(
-        api_key=api_key,
-        base_url=base_url,
-        timeout=float(timeout),
-        max_retries=0,
-        http_client=_http_client,
-    )
     create_kwargs = {
         "model": _model,
         "messages": messages,
@@ -169,7 +216,11 @@ async def _call_ai_via_openai(
     if tools:
         create_kwargs["tools"] = tools
         create_kwargs["tool_choice"] = tool_choice
-    return client.chat.completions.create(**create_kwargs)
+    try:
+        async with _openai_client(live, timeout) as client:
+            return await client.chat.completions.create(**create_kwargs)
+    except Exception as exc:
+        raise _AIRequestError(exc) from None
 
 
 async def _call_ai_via_httpx(
@@ -196,7 +247,7 @@ async def _call_ai_via_httpx(
     if not api_key:
         raise RuntimeError("API Key 未配置")
     if not base_url or "://" not in str(base_url):
-        raise RuntimeError(f"API地址无效: '{base_url}'")
+        raise RuntimeError("API地址无效，请在配置菜单中设置有效的API地址")
 
     url = f"{base_url.rstrip('/')}/chat/completions"
     payload = {
@@ -227,7 +278,12 @@ async def _call_ai_via_httpx(
 
     async with httpx.AsyncClient(timeout=float(timeout), proxy=_proxy_url or None) as client:
         resp = await client.post(url, headers=headers, content=body_bytes)
-        resp.raise_for_status()
+        try:
+            resp.raise_for_status()
+        except httpx.HTTPStatusError as exc:
+            raise httpx.HTTPStatusError(
+                f"HTTP {resp.status_code}", request=exc.request, response=exc.response,
+            ) from None
         data = resp.json()
 
     # 构造兼容 OpenAI 响应对象
@@ -267,6 +323,8 @@ async def call_ai_raw(
     - 最多重试 3 次
     - 返回 OpenAI response 对象（含 choices[0].message.content 和 tool_calls）
     """
+    global _ai_429_cooldown_until
+
     live = _live_config()
     api_key = live.get("api_key", "")
     if not api_key:
@@ -288,7 +346,7 @@ async def call_ai_raw(
         for backend_name, backend_fn in backends:
             try:
                 if verbose and attempt > 0:
-                    print(f"{Fore.CYAN}[AI] 重试 (第{attempt+1}次) via {backend_name}...{Style.RESET_ALL}")
+                    log(f"[AI] 重试 (第{attempt+1}次) via {backend_name}...", "INFO")
 
                 resp = await backend_fn(
                     messages=messages,
@@ -311,29 +369,31 @@ async def call_ai_raw(
             except Exception as e:
                 last_error = e
                 # 429 限流时启动全局冷却，避免连锁限流
-                if "429" in str(e) or "too many requests" in str(e).lower():
+                err_msg = _ai_retry_text(e)
+                if "429" in err_msg or "too many requests" in err_msg:
                     import time
                     _ai_429_cooldown_until = time.time() + 60  # 60 秒冷却
                     if verbose:
-                        print(f"{Fore.YELLOW}[AI] 网关限流 429，启动 60 秒冷却...{Style.RESET_ALL}")
+                        log("[AI] 网关限流 429，启动 60 秒冷却...", "WARN")
                 if _is_fast_fail_error(e):
-                    raise
-                err_msg = str(e).lower()
+                    raise _AIRequestError(e) from None
                 if any(kw in err_msg for kw in
                        ['model_not_found', '无可用渠道', 'model is not found', 'unsupported model']):
                     if verbose:
-                        print(f"{Fore.YELLOW}[AI] 模型不可用 via {backend_name}，切换后端...{Style.RESET_ALL}")
+                        log(f"[AI] 模型不可用 via {backend_name}，切换后端...", "WARN")
                     break
                 continue
 
         if attempt < max_attempts - 1:
             wait = (attempt + 1) * 2.0
-            short_err = str(last_error)[:120] if last_error else "未知错误"
+            short_err = _safe_ai_error(last_error) if last_error else "未知错误"
             if verbose:
-                print(f"{Fore.YELLOW}[AI] 调用异常({short_err})，等待{wait:.0f}秒后重试...{Style.RESET_ALL}")
+                log(f"[AI] 调用异常({short_err})，等待{wait:.0f}秒后重试...", "WARN")
             await asyncio.sleep(wait)
 
-    raise last_error or RuntimeError("AI 调用全部失败")
+    if last_error is not None:
+        raise _AIRequestError(last_error) from None
+    raise RuntimeError("AI 调用全部失败")
 
 
 async def call_ai(
@@ -360,7 +420,7 @@ async def call_ai(
     if time.time() < _ai_429_cooldown_until:
         if verbose:
             remaining = int(_ai_429_cooldown_until - time.time())
-            print(f"{Fore.YELLOW}[AI] 429 冷却中，剩余 {remaining} 秒，跳过本次调用{Style.RESET_ALL}")
+            log(f"[AI] 429 冷却中，剩余 {remaining} 秒，跳过本次调用", "WARN")
         return ""
     
     try:
@@ -376,7 +436,7 @@ async def call_ai(
     except Exception as e:
         # 3 次都失败，优雅返回空字符串，不抛异常
         if verbose:
-            print(f"{Fore.YELLOW}[AI] 3 次重试均失败，放弃本次调用: {str(e)[:80]}{Style.RESET_ALL}")
+            log(f"[AI] 调用失败，放弃本次调用: {_safe_ai_error(e)}", "WARN")
         return ""
 
 
@@ -419,18 +479,7 @@ async def call_ai_with_tools(
     if not _model:
         raise RuntimeError("未配置 model_brain，请在配置菜单中设置 AI 模型")
 
-    # 直接用 openai 库执行 Function Calling 循环（httpx 通道不支持 tool_calls 复杂结构）
-    from openai import OpenAI
-    import httpx as _httpx
-    _proxy_url = ""
-    try:
-        from .proxy_config import get_proxy_url
-        _proxy_url = get_proxy_url()
-    except Exception:
-        pass
-    _http_client = _httpx.Client(proxy=_proxy_url) if _proxy_url else None
-    client = OpenAI(api_key=api_key, base_url=live.get("base_url", ""), timeout=float(timeout),
-                    http_client=_http_client)
+    # tools 保留 SDK 默认重试；普通调用仍由外层控制重试。
     allowed_tool_names = {str(tool.get("function", {}).get("name", "")) for tool in tools}
 
     async def execute_tool(tool_name: str, tool_args: dict) -> str:
@@ -442,86 +491,73 @@ async def call_ai_with_tools(
                 return json.dumps(tool_result, ensure_ascii=False)
             return tool_result
         except Exception as exc:
-            return f"工具执行错误: {exc}"
+            return f"工具执行错误: {_safe_ai_error(exc)}"
 
-    for _round in range(max_tool_rounds):
+    async with _openai_client(live, timeout, use_sdk_retries=True) as client:
+        for _round in range(max_tool_rounds):
+            try:
+                resp = await client.chat.completions.create(
+                    model=_model,
+                    messages=messages,
+                    temperature=temperature,
+                    max_tokens=max_tokens,
+                    tools=tools,
+                    tool_choice="auto",
+                )
+            except Exception as e:
+                if verbose:
+                    log(f"[AI-tools] 第{_round+1}轮调用失败: {_safe_ai_error(e)}", "WARN")
+                break
+
+            choice = resp.choices[0]
+            msg = choice.message
+
+            # Some gateways serialize function calls into normal message text.
+            if not msg.tool_calls:
+                text_call = _extract_text_tool_call(msg.content or "", allowed_tool_names)
+                if not text_call:
+                    return msg.content or ""
+                tool_name, tool_args = text_call
+                tool_result = await execute_tool(tool_name, tool_args)
+                messages.append({"role": "assistant", "content": msg.content or ""})
+                messages.append({
+                    "role": "user",
+                    "content": f"工具 {tool_name} 已执行，结果如下：\n{tool_result}\n\n请继续完成任务；完成时调用 finalize 工具。",
+                })
+                if verbose:
+                    log("[AI-tools] 兼容文本工具调用已完成", "INFO")
+                continue
+
+            # 有 tool_calls → 执行工具并追加结果，handler 协议保持不变。
+            messages.append(msg.model_dump())
+
+            for tc in msg.tool_calls:
+                tool_name = tc.function.name
+                try:
+                    tool_args = json.loads(tc.function.arguments)
+                except json.JSONDecodeError:
+                    tool_args = {}
+                tool_result = await execute_tool(tool_name, tool_args)
+
+                messages.append({
+                    "role": "tool",
+                    "tool_call_id": tc.id,
+                    "content": tool_result,
+                })
+
+                if verbose:
+                    log("[AI-tools] 工具调用已完成", "INFO")
+
+        # 最后一轮：不再传 tools，让模型基于工具结果生成最终回答。
         try:
-            resp = client.chat.completions.create(
+            resp = await client.chat.completions.create(
                 model=_model,
                 messages=messages,
                 temperature=temperature,
                 max_tokens=max_tokens,
-                tools=tools,
-                tool_choice="auto",
             )
+            return resp.choices[0].message.content or ""
         except Exception as e:
             if verbose:
-                print(f"{Fore.YELLOW}[AI-tools] 第{_round+1}轮调用失败: {e}{Style.RESET_ALL}")
-            break
-
-        choice = resp.choices[0]
-        msg = choice.message
-
-        # Some gateways serialize function calls into normal message text.
-        if not msg.tool_calls:
-            text_call = _extract_text_tool_call(msg.content or "", allowed_tool_names)
-            if not text_call:
-                return msg.content or ""
-            tool_name, tool_args = text_call
-            tool_result = await execute_tool(tool_name, tool_args)
-            messages.append({"role": "assistant", "content": msg.content or ""})
-            messages.append({
-                "role": "user",
-                "content": f"工具 {tool_name} 已执行，结果如下：\n{tool_result}\n\n请继续完成任务；完成时调用 finalize 工具。",
-            })
-            if verbose:
-                print(f"{Fore.CYAN}[AI-tools] 兼容文本工具调用 {tool_name} → {tool_result[:80]}...{Style.RESET_ALL}")
-            continue
-
-        # 有 tool_calls → 执行工具并追加结果
-        messages.append(msg.model_dump())
-
-        for tc in msg.tool_calls:
-            tool_name = tc.function.name
-            try:
-                tool_args = json.loads(tc.function.arguments)
-            except json.JSONDecodeError:
-                tool_args = {}
-            tool_result = await execute_tool(tool_name, tool_args)
-
-            messages.append({
-                "role": "tool",
-                "tool_call_id": tc.id,
-                "content": tool_result,
-            })
-
-            if verbose:
-                print(f"{Fore.CYAN}[AI-tools] 调用 {tool_name}({json.dumps(tool_args, ensure_ascii=False)[:120]}) → {tool_result[:80]}...{Style.RESET_ALL}")
-
-    # 最后一轮：不再传 tools，让模型基于工具结果生成最终回答
-    try:
-        resp = client.chat.completions.create(
-            model=_model,
-            messages=messages,
-            temperature=temperature,
-            max_tokens=max_tokens,
-        )
-        return resp.choices[0].message.content or ""
-    except Exception as e:
-        if verbose:
-            print(f"{Fore.YELLOW}[AI-tools] 最终回答生成失败: {e}{Style.RESET_ALL}")
-        return ""
-
-
-def log(msg: str, level: str = "INFO"):
-    """彩色日志输出（简化版，不依赖 core.config.log）"""
-    colors = {
-        "INFO": Fore.WHITE,
-        "SUCCESS": Fore.GREEN,
-        "WARN": Fore.YELLOW,
-        "ERROR": Fore.RED,
-        "DEBUG": Fore.CYAN,
-    }
-    timestamp = datetime.now().strftime("%H:%M:%S")
-    color = colors.get(level, Fore.WHITE)
-    print(f"{color}[{timestamp}][{level}] {msg}{Style.RESET_ALL}")
+                log(f"[AI-tools] 最终回答生成失败: {_safe_ai_error(e)}", "WARN")
+            return ""

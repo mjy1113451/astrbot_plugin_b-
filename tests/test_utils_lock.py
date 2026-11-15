@@ -30,6 +30,17 @@ class UtilsLockTests(unittest.TestCase):
         config = ModuleType(f"{PACKAGE}.core.config")
         config.DATA_DIR = str(self.data_dir)
         modules[config.__name__] = config
+        # Keep logging/runtime lightweight without exposing real business paths.
+        runtime = ModuleType(f"{PACKAGE}._runtime")
+        runtime.plugin_mode = True
+        runtime.data_root = self.data_dir.parent
+        modules[runtime.__name__] = runtime
+        modules[PACKAGE]._runtime = runtime
+        display = ModuleType(f"{PACKAGE}.utils.display")
+        display.log = Mock()
+        display.log_exception = Mock()
+        modules[display.__name__] = display
+        modules[f"{PACKAGE}.utils"].display = display
         colorama = ModuleType("colorama")
         colorama.Fore = SimpleNamespace(RED="", YELLOW="")
         colorama.Style = SimpleNamespace(RESET_ALL="")
@@ -42,6 +53,7 @@ class UtilsLockTests(unittest.TestCase):
         module_patch = patch.dict(sys.modules, modules)
         module_patch.start()
         self.addCleanup(module_patch.stop)
+        self.addCleanup(self.assertNotIn, f"{PACKAGE}.core.user_data", sys.modules)
         with patch.object(sys, "dont_write_bytecode", True):
             spec.loader.exec_module(self.lock)
         self.exit_callbacks = []

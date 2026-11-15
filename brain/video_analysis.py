@@ -3,20 +3,35 @@ import asyncio, json, os, re, time, random, httpx, hashlib
 from pathlib import Path as _Path
 from bilibili_api.video import Video
 from colorama import Fore, Style
+from .. import _runtime
 from ..core.config import config
 from ..core.globals import *  # 所有运行时全局变量
-from ..utils.display import log
+from ..utils.display import log, log_exception
+from ..core.user_data import managed_file_path, resolve_output_path
 from ..utils.helpers import sanitize_filename, _mask_urls
 from .agent_brain import AgentBrain
 from ..knowledge.classifier import KnowledgeBaseClassifier
 from ..api.subtitles import fetch_bilibili_subtitles, SYSTEM_PROMPT_BRAIN
 from ..core.config import get_bot_name
-from ..services.platform_adapter import (
-    extract_video_id,
-    resolve_bilibili_short_url,
-)
+from ..services.platform_adapter import extract_video_id, extract_video_id_async
 
 from ..utils.helpers import _safe_task_callback
+
+
+def _load_profile_cookies():
+    """只读取当前安装的 Cookie；缺失/空配置绝不借用其他账号。"""
+    try:
+        with managed_file_path(COOKIE_FILE).open("r", encoding="utf-8") as handle:
+            cookies = json.load(handle)
+        if not isinstance(cookies, dict):
+            log("当前配置的 Cookie 文件不是对象，已忽略", "WARN")
+            return None
+        return cookies or None
+    except FileNotFoundError:
+        return None
+    except (OSError, ValueError) as exc:
+        log_exception("读取当前配置 Cookie 失败", exc)
+        return None
 
 
 # ==============================================================================
@@ -27,11 +42,23 @@ def _extract_bvid(text: str):
     """从文本中提取 BV 号；复用 B站适配层。"""
     return extract_video_id(text, "bilibili") or None
 
+async def _extract_bvid_async(text: str):
+    """异步提取 BV；短链解析由适配层在线程中完成，输入不重复解析。"""
+    return await extract_video_id_async(text, "bilibili") or None
+
+
 async def _resolve_b23_short(short_code: str) -> str:
-    """解析 b23.tv 短链接为完整 BV 号。"""
-    url = short_code if short_code.startswith("http") else f"https://b23.tv/{short_code}"
-    resolved = resolve_bilibili_short_url(url)
-    return extract_video_id(resolved, "bilibili") or ""
+    """兼容短码、完整链接和已解析 BV；不把 BV 再构造成 b23.tv/BV。"""
+    text = (short_code or "").strip()
+    if not text:
+        return ""
+    if re.fullmatch(r"BV[0-9A-Za-z]{10}", text):
+        return text
+    if text.lower().startswith("b23.tv/"):
+        text = f"https://{text}"
+    elif not text.lower().startswith(("http://", "https://")):
+        text = f"https://b23.tv/{text}"
+    return await _extract_bvid_async(text) or ""
 
 async def _manual_api_retry(api_call, name: str, fallback=None, max_retries=3, base_delay=1.5):
     """手动视频分析专用 API 重试包装器。
@@ -76,11 +103,13 @@ async def _manual_api_retry(api_call, name: str, fallback=None, max_retries=3, b
                 log(f"[RETRY] {name} 触发-799限流，{retry_delay:.0f}s后重试({attempt+1}/{max_retries})...", "MANUAL")
                 await asyncio.sleep(retry_delay)
             elif attempt < max_retries:
-                log(f"[RETRY] {name} 异常: {_mask_urls(err_msg[:120])}，重试中({attempt+1}/{max_retries})...", "MANUAL")
+                log(f"[RETRY] {name} 请求失败，重试中({attempt+1}/{max_retries})", "MANUAL")
+                log_exception("视频分析请求失败", e)
             else:
-                log(f"[ERROR] {name} 重试{max_retries}次均失败: {_mask_urls(err_msg[:200])}", "MANUAL")
+                log(f"[ERROR] {name} 重试{max_retries}次均失败", "MANUAL")
+                log_exception("视频分析重试耗尽", e)
     
-    log(f"[WARN] {name} 最终失败，返回兜底值: {fallback}", "MANUAL")
+    log(f"[WARN] {name} 最终失败，使用兜底结果", "MANUAL")
     return fallback
 
 
@@ -115,13 +144,13 @@ async def _ai_cross_check_subtitle_match(brain, title: str, subtitle_text: str):
             result = json.loads(raw[s:e+1])
             return result.get("match", True), result.get("confidence", 0.5), result.get("reason", "AI验证完成")
     except Exception as ex:
-        log(f"[WARN] AI交叉验证异常: {ex}，默认放行", "MANUAL")
+        log_exception("AI 交叉验证失败", ex)
 
     return True, 0.5, "验证异常-默认放行"
 
 async def analyze_bilibili_video_input(user_input: str, force_mode: str | None = "all", intent: str = ""):
     """非交互 B站视频分析：供 Web 面板后台线程直接执行分析、评分和归档。"""
-    bvid = extract_video_id(user_input, "bilibili")
+    bvid = await _extract_bvid_async(user_input)
     if not bvid:
         return False, "未识别到有效 BV 号"
 
@@ -130,12 +159,7 @@ async def analyze_bilibili_video_input(user_input: str, force_mode: str | None =
         brain.bili._load_credential()
     except Exception:
         pass
-    if os.path.exists(COOKIE_FILE):
-        try:
-            with open(COOKIE_FILE, 'r', encoding='utf-8') as f:
-                brain.cookies = json.load(f)
-        except Exception:
-            pass
+    brain.cookies = _load_profile_cookies()
 
     title = ""
     up_name = "未知"
@@ -159,7 +183,8 @@ async def analyze_bilibili_video_input(user_input: str, force_mode: str | None =
         else:
             return False, f"获取视频信息失败: code={vinfo.get('code')}"
     except Exception as e:
-        return False, f"获取视频信息失败: {e}"
+        log_exception("获取视频信息失败", e)
+        return False, f"获取视频信息失败（{type(e).__name__}）"
 
     video_url = f"https://www.bilibili.com/video/{bvid}"
     cover_desc, _cover_score = await brain.analyze_vision(cover_url)
@@ -214,7 +239,7 @@ async def analyze_bilibili_video_input(user_input: str, force_mode: str | None =
             thought = decision.get('thought', '')
             learning_topic = decision.get('learning_topic', '') or learning_topic
     except Exception as e:
-        log(f"Web B站分析 AI评分失败: {e}", "WARN")
+        log_exception("B站分析 AI 评分失败", e)
         score = LEARN_MIN_SCORE
         thought = "Web后台已获取视频内容，AI评分失败，按用户主动请求尝试归档。"
 
@@ -235,6 +260,8 @@ async def analyze_bilibili_video_input(user_input: str, force_mode: str | None =
 
 async def manual_video_analysis(force_platform: str | None = "bilibili"):
     """手动视频分析：用户输入链接/标题/UP主名，AI客观解析视频内容。"""
+    if _runtime.plugin_mode:
+        raise RuntimeError("插件模式不支持终端交互或默认确认，请使用显式参数的非交互视频接口")
     print(f"\n{Fore.CYAN}+============================================================+{Style.RESET_ALL}")
     print(f"{Fore.CYAN}|               📹 手动视频分析 - 客观AI解析                    |{Style.RESET_ALL}")
     print(f"{Fore.CYAN}+============================================================+{Style.RESET_ALL}")
@@ -253,58 +280,20 @@ async def manual_video_analysis(force_platform: str | None = "bilibili"):
     up_uid = None
     from_search = False
 
-    raw_bvid = _extract_bvid(user_input)
-    if raw_bvid:
-        # 可能是 b23.tv 短链接
-        if 'b23.tv' in user_input.lower():
-            resolved = await _resolve_b23_short(raw_bvid)
-            if resolved:
-                bvid = resolved
-                log(f"短链接解析: b23.tv/{raw_bvid} -> {bvid}", "RESOLVE")
-            else:
-                print(f"{Fore.RED}[ERROR] 短链接解析失败，尝试直接搜索...{Style.RESET_ALL}")
-                from_search = True
-        else:
-            bvid = raw_bvid
-
-    if not bvid and not from_search:
-        from_search = True
+    bvid = await _extract_bvid_async(user_input)
+    if bvid and 'b23.tv' in user_input.lower():
+        log(f"短链接已解析为 {bvid}", "RESOLVE")
+    from_search = not bvid
 
     # ── 提前创建 AgentBrain，加载凭证用于搜索 ──
     brain = AgentBrain()
     brain.bili._load_credential()
     # [FIX] 同时加载 cookies，否则 fetch_bilibili_subtitles 无 cookie 无法获取AI字幕
     # B站 player/wbi/v2 在未登录时不返回AI字幕（如 lan:ai-zh）
-    cookie_loaded = False
-    # 1) 检查项目自己的 cookie
-    if os.path.exists(COOKIE_FILE):
-        with open(COOKIE_FILE, 'r', encoding='utf-8') as f:
-            brain.cookies = json.load(f)
-        cookie_loaded = True
-        log(f"[AUTO] 从本地项目加载到登录Cookie (UID: {brain.cookies.get('DedeUserID','?')})", "LOGIN")
+    brain.cookies = _load_profile_cookies()
+    if brain.cookies:
+        log("已加载当前配置的登录 Cookie", "LOGIN")
     else:
-        # 2) 扫描兄弟项目的 cookie 文件
-        sibling_dirs = [
-            ("bilibili_learning_bot", "Data/bilibili_cookies.json"),
-            ("bilibili_learning_bot-2.2.1", "Data/bilibili_cookies.json"),
-            ("bilibili_learning_bot-3.0.1", "Data/bilibili_cookies.json"),
-            ("bilibili_learning_bot-2.2.2/bilibili_learning_bot-3.0.0", "Data/bilibili_cookies.json"),
-            ("bilibili_claw", "Data/bilibili_cookies.json"),
-            ("batch_unfollow", "Data/bilibili_cookies.json"),
-        ]
-        for sib_dir, sib_file in sibling_dirs:
-            sibling_cookie = os.path.join(os.path.dirname(BASE_DIR), sib_dir, sib_file)
-            if os.path.exists(sibling_cookie):
-                try:
-                    with open(sibling_cookie, 'r', encoding='utf-8') as f:
-                        brain.cookies = json.load(f)
-                    uid = brain.cookies.get('DedeUserID', '?')
-                    log(f"[AUTO] 从 {sib_dir} 项目加载到登录Cookie (UID: {uid})", "LOGIN")
-                    cookie_loaded = True
-                    break
-                except Exception as e:
-                    log(f'非预期异常: {e}', 'WARN')
-    if not cookie_loaded:
         print(f"{Fore.YELLOW}[HINT] 未登录(Cookie文件不存在)，部分视频的AI字幕可能需要登录才能获取{Style.RESET_ALL}")
         print(f"{Fore.YELLOW}       建议先运行菜单 3 录入登录Cookie，以获取完整AI字幕功能{Style.RESET_ALL}")
 
@@ -516,7 +505,7 @@ async def manual_video_analysis(force_platform: str | None = "bilibili"):
             if vinfo.get('code') == 0:
                 _aid = vinfo.get('data', {}).get('aid', 0)
         except Exception as e:
-            log(f'非预期异常: {e}', 'WARN')
+            log_exception("视频分析操作失败", e)
         await _agent_video_analysis(brain, bvid, title, up_name, video_url, _aid)
         return
     
@@ -532,7 +521,7 @@ async def manual_video_analysis(force_platform: str | None = "bilibili"):
             if vinfo.get('code') == 0:
                 _aid = vinfo.get('data', {}).get('aid', 0)
         except Exception as e:
-            log(f'非预期异常: {e}', 'WARN')
+            log_exception("视频分析操作失败", e)
         # 一句话Agent：自动运行一次，无需交互
         await _one_sentence_agent(brain, bvid, title, up_name, video_url, _aid)
         return
@@ -573,7 +562,7 @@ async def manual_video_analysis(force_platform: str | None = "bilibili"):
         globals()['MOOD_CUSTOM_ENABLED'] = True
         globals()['MOOD_CUSTOM_VALUE'] = "客观冷静分析，专注内容质量，不带个人情绪"
     except Exception as e:
-        log(f'非预期异常: {e}', 'WARN')
+        log_exception("视频分析操作失败", e)
 
     print(f"\n{Fore.CYAN}+============================================================+{Style.RESET_ALL}")
     print(f"{Fore.CYAN}|  [模式] 客观分析 - 开始解析视频内容                           |{Style.RESET_ALL}")
@@ -669,7 +658,7 @@ async def manual_video_analysis(force_platform: str | None = "bilibili"):
                 )
                 print(f"{Fore.GREEN}[OK] 获取到 {len(danmaku_list)} 条弹幕{Style.RESET_ALL}")
         except Exception as e:
-            log(f'非预期异常: {e}', 'WARN')
+            log_exception("视频分析操作失败", e)
 
     # 3. AI决策分析（客观模式）- 支持3次重试
     MAX_AI_DECISION_RETRIES = 3
@@ -759,7 +748,7 @@ async def manual_video_analysis(force_platform: str | None = "bilibili"):
         globals()['MOOD_CUSTOM_ENABLED'] = original_custom
         globals()['MOOD_CUSTOM_VALUE'] = original_custom_value
     except Exception as e:
-        log(f'非预期异常: {e}', 'WARN')
+        log_exception("视频分析操作失败", e)
 
     # 4. 如果干货 → 学习归档
     if score >= LEARN_MIN_SCORE or learning_topic:
@@ -845,7 +834,7 @@ def _scan_knowledge_base_md_files():
                     if up_m:
                         up_name = up_m.group(1).strip()
             except Exception as e:
-                log(f'非预期异常: {e}', 'WARN')
+                log_exception("视频分析操作失败", e)
             # 分类路径: 去掉文件名后的目录部分
             category_path = os.path.dirname(rel_path).replace(os.sep, '/')
             if not category_path or category_path == '.':
@@ -922,6 +911,8 @@ async def _one_sentence_agent(brain, bvid, title, up_name, video_url, aid=0):
     - AI自动跑完所有步骤后输出 [DONE]
     - 无需多轮对话确认
     """
+    if _runtime.plugin_mode:
+        raise RuntimeError("插件模式不支持终端交互或默认确认，请使用显式参数的非交互视频接口")
     print(f"\n{Fore.LIGHTBLUE_EX}+============================================================+{Style.RESET_ALL}")
     print(f"{Fore.LIGHTBLUE_EX}|  🤖 一句话Agent - 全自动执行模式                          |{Style.RESET_ALL}")
     print(f"{Fore.LIGHTBLUE_EX}+============================================================+{Style.RESET_ALL}")
@@ -1164,6 +1155,8 @@ async def _agent_video_analysis(brain, bvid, title, up_name, video_url, aid=0):
     - analyze_video: 触发完整视频分析管道
     - quick_preview: 只看标题/简介/评论/弹幕
     """
+    if _runtime.plugin_mode:
+        raise RuntimeError("插件模式不支持终端交互或默认确认，请使用显式参数的非交互视频接口")
     print(f"\n{Fore.LIGHTMAGENTA_EX}+============================================================+{Style.RESET_ALL}")
     print(f"{Fore.LIGHTMAGENTA_EX}|  🤖 Agent对话模式 - 多轮对话 + 文件CRUD + 智能分析          |{Style.RESET_ALL}")
     print(f"{Fore.LIGHTMAGENTA_EX}+============================================================+{Style.RESET_ALL}")
@@ -1406,7 +1399,7 @@ async def _agent_video_analysis(brain, bvid, title, up_name, video_url, aid=0):
                     with open(f, 'r', encoding='utf-8') as fh:
                         preview = fh.read(200).replace('\n', ' ')
                 except Exception as e:
-                    log(f'非预期异常: {e}', 'WARN')
+                    log_exception("视频分析操作失败", e)
                 matches.append((score, b, t, f, u, c, preview))
         matches.sort(key=lambda x: x[0], reverse=True)
         if not matches:
@@ -1461,7 +1454,7 @@ async def _agent_video_analysis(brain, bvid, title, up_name, video_url, aid=0):
             with open(full_path, 'r', encoding='utf-8') as fh:
                 preview = fh.read(300).replace('\n', ' ')
         except Exception as e:
-            log(f'非预期异常: {e}', 'WARN')
+            log_exception("视频分析操作失败", e)
         action_desc = f"删除知识库文件: {rel_path}"
         detail = f"文件预览: {preview}..."
         result = await _agent_confirm("delete_file", action_desc, detail)
@@ -1568,7 +1561,7 @@ async def _agent_video_analysis(brain, bvid, title, up_name, video_url, aid=0):
             if vinfo.get('code') == 0:
                 desc = vinfo['data'].get('desc', '')[:500]
         except Exception as e:
-            log(f'非预期异常: {e}', 'WARN')
+            log_exception("视频分析操作失败", e)
 
         # 评论
         comment_text = "[无评论]"
@@ -1577,7 +1570,7 @@ async def _agent_video_analysis(brain, bvid, title, up_name, video_url, aid=0):
             try:
                 comment_text, c_list = await brain._get_comments_context(aid)
             except Exception as e:
-                log(f'非预期异常: {e}', 'WARN')
+                log_exception("视频分析操作失败", e)
 
         # 弹幕
         danmaku_text = ""
@@ -1586,7 +1579,7 @@ async def _agent_video_analysis(brain, bvid, title, up_name, video_url, aid=0):
             if danmaku_list:
                 danmaku_text = "\n".join(f"  {dm.get('text','')}" for dm in danmaku_list[:10])
         except Exception as e:
-            log(f'非预期异常: {e}', 'WARN')
+            log_exception("视频分析操作失败", e)
 
         preview = f"""【视频信息】
 标题: {title}
@@ -1625,13 +1618,13 @@ UP主: {up_name}
             try:
                 comment_text, c_list = await brain._get_comments_context(aid)
             except Exception as e:
-                log(f'非预期异常: {e}', 'WARN')
+                log_exception("视频分析操作失败", e)
             try:
                 danmaku_list = await brain.maybe_read_danmaku(bvid)
                 if danmaku_list:
                     danmaku_text = "\n".join(f"  {dm.get('text','')}" for dm in danmaku_list[:15])
             except Exception as e:
-                log(f'非预期异常: {e}', 'WARN')
+                log_exception("视频分析操作失败", e)
 
         # 3. AI决策
         print(f"{Fore.CYAN}[Agent] [2/4] AI决策分析...{Style.RESET_ALL}")
@@ -1675,7 +1668,7 @@ UP主: {up_name}
             thought = decision.get('thought', '')
             learning_topic = decision.get('learning_topic', '')
         except Exception as e:
-            log(f'非预期异常: {e}', 'WARN')
+            log_exception("视频分析操作失败", e)
 
         # 4. 学习归档
         print(f"{Fore.CYAN}[Agent] [3/4] 学习归档...{Style.RESET_ALL}")
@@ -1946,32 +1939,38 @@ async def up_homepage_learn(
         skip_without_subtitle: 是否跳过无字幕视频，None 表示交互询问。
         min_score: 低于该分数的视频不归档，None 表示交互询问。
     """
-    print(f"\n{Fore.CYAN}+============================================================+{Style.RESET_ALL}")
-    print(f"{Fore.CYAN}|               📚 UP主主页批量学习                            |{Style.RESET_ALL}")
-    print(f"{Fore.CYAN}+============================================================+{Style.RESET_ALL}")
-    print(f"{Fore.YELLOW}[INFO] 输入UP主名字或UID，获取TA主页的视频进行AI学习{Style.RESET_ALL}")
+    if _runtime.plugin_mode and query is None:
+        raise RuntimeError("插件模式批量学习必须显式提供 query，不支持终端交互")
+    interactive = query is None and not _runtime.plugin_mode
+    if not interactive and any(value is None for value in (limit, skip_without_subtitle, min_score)):
+        raise ValueError("非交互批量学习必须显式提供 limit、skip_without_subtitle 和 min_score")
+    if interactive:
+        print(f"\n{Fore.CYAN}+============================================================+{Style.RESET_ALL}")
+        print(f"{Fore.CYAN}|               📚 UP主主页批量学习                            |{Style.RESET_ALL}")
+        print(f"{Fore.CYAN}+============================================================+{Style.RESET_ALL}")
+        print(f"{Fore.YELLOW}[INFO] 输入UP主名字或UID，获取TA主页的视频进行AI学习{Style.RESET_ALL}")
+    else:
+        try:
+            if int(limit) < 1 or not isinstance(skip_without_subtitle, bool) or not 1 <= float(min_score) <= 10:
+                raise ValueError("参数超出范围")
+        except (TypeError, ValueError, OverflowError) as exc:
+            raise ValueError("非交互批量参数无效：limit 必须为正数，skip_without_subtitle 必须为布尔值，min_score 必须在 1-10") from exc
+        log("开始 UP 主主页批量学习", "INFO")
 
     if query is not None:
         user_input = str(query).strip()
     else:
         user_input = input(f"\n{Fore.CYAN}请输入UP主名字或UID: {Style.RESET_ALL}").strip()
     if not user_input:
-        print(f"{Fore.YELLOW}[WARN] 输入为空，已取消{Style.RESET_ALL}")
+        log(f'[WARN] 输入为空，已取消', 'WARN')
         return
 
     # ── 创建 AgentBrain 并加载凭证 ──
     brain = AgentBrain()
     brain.bili._load_credential()
-    cookie_loaded = False
-    if os.path.exists(COOKIE_FILE):
-        try:
-            with open(COOKIE_FILE, 'r', encoding='utf-8') as f:
-                brain.cookies = json.load(f)
-            cookie_loaded = True
-        except (json.JSONDecodeError, OSError) as e:
-            print(f"{Fore.YELLOW}[WARN] Cookie文件损坏: {e}{Style.RESET_ALL}")
-    if not cookie_loaded:
-        print(f"{Fore.YELLOW}[HINT] 未登录(Cookie文件不存在)，部分视频的AI字幕可能需要登录才能获取{Style.RESET_ALL}")
+    brain.cookies = _load_profile_cookies()
+    if not brain.cookies:
+        log("当前配置未登录，部分视频的 AI 字幕可能需要登录才能获取", "WARN")
 
     # ── 第一步：查找UP主 ──
     up_uid = None
@@ -1987,7 +1986,7 @@ async def up_homepage_learn(
 
     if not up_uid:
         # 搜索UP主
-        print(f"\n{Fore.CYAN}搜索UP主: {user_input}...{Style.RESET_ALL}")
+        log(f'\n搜索UP主: {user_input}...', 'INFO')
         try:
             from bilibili_api import search as bili_search
             data = await bili_search.search_by_type(
@@ -1997,32 +1996,33 @@ async def up_homepage_learn(
             )
             user_items = data.get("result") or []
             if not user_items:
-                print(f"{Fore.RED}[ERROR] 未找到UP主: {user_input}{Style.RESET_ALL}")
+                log(f'[ERROR] 未找到UP主: {user_input}', 'ERROR')
                 return
 
-            # 显示搜索结果
-            print(f"\n{Fore.GREEN}找到 {len(user_items)} 个UP主:{Style.RESET_ALL}")
-            for i, u in enumerate(user_items[:10]):
-                name = u.get("uname") or u.get("name", "?")
-                uid = u.get("mid") or u.get("uid", 0)
-                fans = u.get("fans", 0)
-                sign = (u.get("usign") or u.get("sign", ""))[:40]
-                fans_str = f"{fans/10000:.1f}w" if fans >= 10000 else str(fans)
-                print(f"  {Fore.YELLOW}{i+1:>2}.{Style.RESET_ALL} {name}  (UID: {uid}, 粉丝: {fans_str})")
-                if sign:
-                    print(f"      {Fore.LIGHTBLACK_EX}{sign}{Style.RESET_ALL}")
-            print(f"  {Fore.YELLOW} 0.{Style.RESET_ALL} 取消")
+            if interactive:
+                # 显示搜索结果
+                print(f"\n{Fore.GREEN}找到 {len(user_items)} 个UP主:{Style.RESET_ALL}")
+                for i, u in enumerate(user_items[:10]):
+                    name = u.get("uname") or u.get("name", "?")
+                    uid = u.get("mid") or u.get("uid", 0)
+                    fans = u.get("fans", 0)
+                    sign = (u.get("usign") or u.get("sign", ""))[:40]
+                    fans_str = f"{fans/10000:.1f}w" if fans >= 10000 else str(fans)
+                    print(f"  {Fore.YELLOW}{i+1:>2}.{Style.RESET_ALL} {name}  (UID: {uid}, 粉丝: {fans_str})")
+                    if sign:
+                        print(f"      {Fore.LIGHTBLACK_EX}{sign}{Style.RESET_ALL}")
+                print(f"  {Fore.YELLOW} 0.{Style.RESET_ALL} 取消")
 
             if query is not None:
                 # 非交互调用（AstrBot 指令）：直接取第一条搜索结果，避免 input() 阻塞
                 chosen = user_items[0]
                 up_uid = int(chosen.get("mid") or chosen.get("uid", 0))
                 up_name = chosen.get("uname") or chosen.get("name", "")
-                print(f"{Fore.GREEN}[AUTO] 非交互模式，自动选择: {up_name} (UID: {up_uid}){Style.RESET_ALL}")
+                log(f'[AUTO] 非交互模式，自动选择: {up_name} (UID: {up_uid})', 'SUCCESS')
             else:
                 choice = input(f"\n{Fore.CYAN}请选择UP主编号 (1-{min(len(user_items), 10)}): {Style.RESET_ALL}").strip()
                 if choice == "0" or choice == "":
-                    print(f"{Fore.YELLOW}[WARN] 已取消{Style.RESET_ALL}")
+                    log(f'[WARN] 已取消', 'WARN')
                     return
                 try:
                     idx = int(choice) - 1
@@ -2031,24 +2031,24 @@ async def up_homepage_learn(
                         up_uid = int(chosen.get("mid") or chosen.get("uid", 0))
                         up_name = chosen.get("uname") or chosen.get("name", "")
                     else:
-                        print(f"{Fore.RED}[ERROR] 无效选项{Style.RESET_ALL}")
+                        log(f'[ERROR] 无效选项', 'ERROR')
                         return
                 except ValueError:
-                    print(f"{Fore.RED}[ERROR] 请输入数字{Style.RESET_ALL}")
+                    log(f'[ERROR] 请输入数字', 'ERROR')
                     return
         except Exception as e:
-            print(f"{Fore.RED}[ERROR] 搜索UP主失败: {e}{Style.RESET_ALL}")
+            log_exception("搜索UP主失败", e)
             return
 
     if not up_uid:
-        print(f"{Fore.RED}[ERROR] 无法获取UP主UID{Style.RESET_ALL}")
+        log(f'[ERROR] 无法获取UP主UID', 'ERROR')
         return
 
     # ── 获取UP主信息 ──
-    print(f"\n{Fore.CYAN}获取UP主信息...{Style.RESET_ALL}")
+    log(f'\n获取UP主信息...', 'INFO')
     up_info = await brain.bili.get_up_info(up_uid)
     if "error" in up_info:
-        print(f"{Fore.RED}[ERROR] 获取UP主信息失败: {up_info['error']}{Style.RESET_ALL}")
+        log(f"[ERROR] 获取UP主信息失败: {up_info['error']}", 'ERROR')
         return
 
     up_name = up_info.get("name", up_name or "未知")
@@ -2056,15 +2056,16 @@ async def up_homepage_learn(
     video_count = up_info.get("video_count", 0)
     fans_str = f"{follower/10000:.1f}w" if follower >= 10000 else str(follower)
 
-    print(f"\n{Fore.GREEN}+------------------------------------------------------------+{Style.RESET_ALL}")
-    print(f"{Fore.GREEN}|  UP主: {up_name}{Style.RESET_ALL}")
-    print(f"{Fore.GREEN}|  UID:  {up_uid}{Style.RESET_ALL}")
-    print(f"{Fore.GREEN}|  粉丝: {fans_str}  |  投稿: {video_count}个视频{Style.RESET_ALL}")
-    print(f"{Fore.GREEN}+------------------------------------------------------------+{Style.RESET_ALL}")
+    if interactive:
+        print(f"\n{Fore.GREEN}+------------------------------------------------------------+{Style.RESET_ALL}")
+        print(f"{Fore.GREEN}|  UP主: {up_name}{Style.RESET_ALL}")
+        print(f"{Fore.GREEN}|  UID:  {up_uid}{Style.RESET_ALL}")
+        print(f"{Fore.GREEN}|  粉丝: {fans_str}  |  投稿: {video_count}个视频{Style.RESET_ALL}")
+        print(f"{Fore.GREEN}+------------------------------------------------------------+{Style.RESET_ALL}")
 
     # ── 第二步：获取视频列表 ──
     max_fetch = min(video_count, 50) if video_count > 0 else 50
-    print(f"\n{Fore.CYAN}获取 @{up_name} 的视频列表 (最多{max_fetch}个)...{Style.RESET_ALL}")
+    log(f'\n获取 @{up_name} 的视频列表 (最多{max_fetch}个)...', 'INFO')
 
     try:
         from bilibili_api import user as bili_user
@@ -2087,32 +2088,33 @@ async def up_homepage_learn(
                     break
         vlist = vlist[:max_fetch]
     except Exception as e:
-        print(f"{Fore.RED}[ERROR] 获取视频列表失败: {e}{Style.RESET_ALL}")
+        log_exception("获取视频列表失败", e)
         return
 
     if not vlist:
-        print(f"{Fore.RED}[ERROR] @{up_name} 没有投稿视频{Style.RESET_ALL}")
+        log(f'[ERROR] @{up_name} 没有投稿视频', 'ERROR')
         return
 
-    print(f"{Fore.GREEN}[OK] 获取到 {len(vlist)} 个视频{Style.RESET_ALL}")
+    log(f'[OK] 获取到 {len(vlist)} 个视频', 'SUCCESS')
 
-    # ── 显示视频列表 ──
-    print(f"\n{Fore.CYAN}{'─' * 70}{Style.RESET_ALL}")
-    for i, v in enumerate(vlist):
-        title = v.get("title", "无标题")[:45]
-        play = v.get("play", 0)
-        play_str = f"{play/10000:.1f}w" if play >= 10000 else str(play)
-        created = v.get("created", 0)
-        if created:
-            from datetime import datetime
-            dt = datetime.fromtimestamp(created).strftime("%m-%d")
-        else:
-            dt = "??"
-        print(f"  {Fore.YELLOW}{i+1:>2}.{Style.RESET_ALL} {title}  {Fore.LIGHTBLACK_EX}▶{play_str} | {dt}{Style.RESET_ALL}")
-    print(f"{Fore.CYAN}{'─' * 70}{Style.RESET_ALL}")
+    if interactive:
+        # ── 显示视频列表 ──
+        print(f"\n{Fore.CYAN}{'─' * 70}{Style.RESET_ALL}")
+        for i, v in enumerate(vlist):
+            title = v.get("title", "无标题")[:45]
+            play = v.get("play", 0)
+            play_str = f"{play/10000:.1f}w" if play >= 10000 else str(play)
+            created = v.get("created", 0)
+            if created:
+                from datetime import datetime
+                dt = datetime.fromtimestamp(created).strftime("%m-%d")
+            else:
+                dt = "??"
+            print(f"  {Fore.YELLOW}{i+1:>2}.{Style.RESET_ALL} {title}  {Fore.LIGHTBLACK_EX}▶{play_str} | {dt}{Style.RESET_ALL}")
+        print(f"{Fore.CYAN}{'─' * 70}{Style.RESET_ALL}")
 
     # ── 第三步：设置参数 ──
-    print(f"\n{Fore.CYAN}设置学习参数:{Style.RESET_ALL}")
+    log(f'\n设置学习参数:', 'INFO')
 
     if limit is None:
         count_input = input(f"{Fore.YELLOW}要学习几个视频？(1-{len(vlist)}, 回车=全部{len(vlist)}个): {Style.RESET_ALL}").strip()
@@ -2127,9 +2129,9 @@ async def up_homepage_learn(
         try:
             watch_count = max(1, min(int(limit), len(vlist)))
         except (TypeError, ValueError):
-            print(f"{Fore.YELLOW}[WARN] limit 参数无效: {limit!r}，改为学习全部 {len(vlist)} 个{Style.RESET_ALL}")
+            log(f'[WARN] limit 参数无效: {limit!r}，改为学习全部 {len(vlist)} 个', 'WARN')
             watch_count = len(vlist)
-    print(f"{Fore.GREEN}[OK] 将学习 {watch_count} 个视频{Style.RESET_ALL}")
+    log(f'[OK] 将学习 {watch_count} 个视频', 'SUCCESS')
 
     # 跳过无字幕
     if skip_without_subtitle is None:
@@ -2150,14 +2152,15 @@ async def up_homepage_learn(
         try:
             learn_threshold = max(1.0, min(10.0, float(min_score)))
         except (TypeError, ValueError):
-            print(f"{Fore.YELLOW}[WARN] min_score 参数无效: {min_score!r}，使用默认 7.0{Style.RESET_ALL}")
+            log(f'[WARN] min_score 参数无效: {min_score!r}，使用默认 7.0', 'WARN')
             learn_threshold = 7.0
-    print(f"{Fore.GREEN}[OK] 低于 {learn_threshold} 分的内容不归档{Style.RESET_ALL}")
+    if interactive:
+        print(f"{Fore.GREEN}[OK] 低于 {learn_threshold} 分的内容不归档{Style.RESET_ALL}")
 
-    # ── 第四步：逐个学习 ──
-    print(f"\n{Fore.CYAN}+============================================================+{Style.RESET_ALL}")
-    print(f"{Fore.CYAN}|  开始批量学习 @{up_name} 的视频 (共{watch_count}个)             |{Style.RESET_ALL}")
-    print(f"{Fore.CYAN}+============================================================+{Style.RESET_ALL}")
+        # ── 第四步：逐个学习 ──
+        print(f"\n{Fore.CYAN}+============================================================+{Style.RESET_ALL}")
+        print(f"{Fore.CYAN}|  开始批量学习 @{up_name} 的视频 (共{watch_count}个)             |{Style.RESET_ALL}")
+        print(f"{Fore.CYAN}+============================================================+{Style.RESET_ALL}")
 
     success_count = 0
     skip_count = 0
@@ -2172,39 +2175,40 @@ async def up_homepage_learn(
         title = v.get("title", "无标题")
         video_url = f"https://www.bilibili.com/video/{bvid}"
 
-        print(f"\n{Fore.CYAN}{'═' * 70}{Style.RESET_ALL}")
-        print(f"{Fore.CYAN}[{idx+1}/{watch_count}] {title}{Style.RESET_ALL}")
-        print(f"{Fore.CYAN}{'═' * 70}{Style.RESET_ALL}")
+        if interactive:
+            print(f"\n{Fore.CYAN}{'═' * 70}{Style.RESET_ALL}")
+            print(f"{Fore.CYAN}[{idx+1}/{watch_count}] {title}{Style.RESET_ALL}")
+            print(f"{Fore.CYAN}{'═' * 70}{Style.RESET_ALL}")
 
         if not bvid:
-            print(f"{Fore.YELLOW}[SKIP] 无BV号，跳过{Style.RESET_ALL}")
+            log(f'[SKIP] 无BV号，跳过', 'INFO')
             skip_count += 1
             continue
 
         # 间隔延迟（模拟真人）
         if idx > 0:
             delay = random.uniform(3.0, 8.0)
-            print(f"{Fore.LIGHTBLACK_EX}等待 {delay:.1f}s (模拟真人节奏)...{Style.RESET_ALL}")
+            log(f'等待 {delay:.1f}s (模拟真人节奏)...', 'INFO')
             await asyncio.sleep(delay)
 
         try:
             # 1. 视频理解
-            print(f"\n{Fore.CYAN}[1/3] 理解视频内容...{Style.RESET_ALL}")
+            log(f'\n[1/3] 理解视频内容...', 'INFO')
             brain.bili._video_meta_cache.pop(bvid, None)
             success, subtitle_text = await brain.understand_video_for_decision(bvid, title=title)
             if success:
                 preview = subtitle_text[:150].replace('\n', ' ')
-                print(f"{Fore.GREEN}[OK] 内容获取成功: {preview}...{Style.RESET_ALL}")
+                log(f'内容获取成功 ({len(subtitle_text)}字)', 'SUCCESS')
             else:
                 subtitle_text = f"[理解受限] {subtitle_text}"
                 if skip_no_sub and ("无有效字幕" in str(subtitle_text) or "Cookie文件不存在" in str(subtitle_text)):
-                    print(f"{Fore.YELLOW}[SKIP] 无字幕且设置了跳过{Style.RESET_ALL}")
+                    log(f'[SKIP] 无字幕且设置了跳过', 'INFO')
                     skip_count += 1
                     continue
-                print(f"{Fore.YELLOW}[WARN] 视频理解受限: {str(subtitle_text)[:120]}{Style.RESET_ALL}")
+                log('视频理解受限', 'WARN')
 
             # 2. AI决策分析（客观模式）
-            print(f"\n{Fore.CYAN}[2/3] AI客观分析...{Style.RESET_ALL}")
+            log(f'\n[2/3] AI客观分析...', 'INFO')
 
             try:
                 globals()['MOOD_CUSTOM_ENABLED'] = True
@@ -2245,12 +2249,12 @@ async def up_homepage_learn(
             thought = decision.get('thought', '')
             learning_topic = decision.get('learning_topic', '')
 
-            print(f"  AI评分: {Fore.YELLOW}{score}/10{Style.RESET_ALL}")
-            print(f"  AI想法: {thought[:100]}")
+            log(f'  AI评分: {score}/10', 'INFO')
+            log('AI评分已完成', 'INFO')
 
             # 3. 归档
             if score >= learn_threshold or learning_topic:
-                print(f"\n{Fore.CYAN}[3/3] 知识归档...{Style.RESET_ALL}")
+                log(f'\n[3/3] 知识归档...', 'INFO')
                 learn_text = subtitle_text
                 if not learn_text or len(learn_text) < 20:
                     learn_text = f"【视频标题】{title}\n【AI判断】{thought}\n"
@@ -2261,20 +2265,20 @@ async def up_homepage_learn(
                     _desc = getattr(brain, "_last_video_desc", "")
                     learn_ok = await brain.learn_from_video(bvid, title, up_name, video_url, learn_text, learning_topic, video_desc=_desc, score=score)
                     if learn_ok:
-                        print(f"{Fore.GREEN}[OK] ✓ 已归档 (评分 {score}){Style.RESET_ALL}")
+                        log(f'[OK] ✓ 已归档 (评分 {score})', 'SUCCESS')
                         success_count += 1
                     else:
-                        print(f"{Fore.YELLOW}[INFO] 知识已存在，跳过{Style.RESET_ALL}")
+                        log(f'[INFO] 知识已存在，跳过', 'INFO')
                         skip_count += 1
                 except Exception as e:
-                    print(f"{Fore.RED}[ERROR] 归档失败: {e}{Style.RESET_ALL}")
+                    log_exception("UP主学习归档失败", e)
                     fail_count += 1
             else:
-                print(f"{Fore.YELLOW}[SKIP] 评分 {score} < {learn_threshold}，不归档{Style.RESET_ALL}")
+                log(f'[SKIP] 评分 {score} < {learn_threshold}，不归档', 'INFO')
                 skip_count += 1
 
         except Exception as e:
-            print(f"{Fore.RED}[ERROR] 处理失败: {str(e)[:150]}{Style.RESET_ALL}")
+            log_exception("UP主视频处理失败", e)
             fail_count += 1
             continue
 
@@ -2286,12 +2290,13 @@ async def up_homepage_learn(
         pass
 
     # ── 汇总 ──
-    print(f"\n{Fore.GREEN}+============================================================+{Style.RESET_ALL}")
-    print(f"{Fore.GREEN}|  UP主主页批量学习完成！                                      |{Style.RESET_ALL}")
-    print(f"{Fore.GREEN}+============================================================+{Style.RESET_ALL}")
-    print(f"  UP主: @{up_name}")
-    print(f"  学习: {Fore.GREEN}{success_count}个{Style.RESET_ALL} | 跳过: {Fore.YELLOW}{skip_count}个{Style.RESET_ALL} | 失败: {Fore.RED}{fail_count}个{Style.RESET_ALL}")
-    print(f"  总计: {watch_count}个视频")
-    print(f"{Fore.GREEN}+============================================================+{Style.RESET_ALL}")
+    if interactive:
+        print(f"\n{Fore.GREEN}+============================================================+{Style.RESET_ALL}")
+        print(f"{Fore.GREEN}|  UP主主页批量学习完成！                                      |{Style.RESET_ALL}")
+        print(f"{Fore.GREEN}+============================================================+{Style.RESET_ALL}")
+        print(f"  UP主: @{up_name}")
+        print(f"  学习: {Fore.GREEN}{success_count}个{Style.RESET_ALL} | 跳过: {Fore.YELLOW}{skip_count}个{Style.RESET_ALL} | 失败: {Fore.RED}{fail_count}个{Style.RESET_ALL}")
+        print(f"  总计: {watch_count}个视频")
+        print(f"{Fore.GREEN}+============================================================+{Style.RESET_ALL}")
 
 

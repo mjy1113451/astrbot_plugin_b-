@@ -1,7 +1,7 @@
-"""Issue #39: AstrBot package loading without exposing the repo on sys.path.
+"""Issues #39/#41: isolated, lazy AstrBot package loading and runtime binding.
 
-Only the package entry points and config bridge are real. Business modules are
-stubbed by their qualified names; full business-import integrity is tested
+Only the package entry points, lightweight runtime and config bridge are real.
+Business modules are stubbed by their qualified names; full import integrity is tested
 separately. Run with stdlib only:
 python -B -m unittest discover -s tests -p test_package_imports.py -v
 """
@@ -29,7 +29,7 @@ PACKAGE_A = "data.plugins.fixture_a"
 PACKAGE_B = "data.plugins.fixture_b"
 PACKAGES = (PACKAGE_A, PACKAGE_B)
 BARE_ROOTS = {
-    "api", "brain", "cli", "core", "editdistance", "knowledge", "main",
+    "_runtime", "api", "brain", "cli", "core", "editdistance", "knowledge", "main",
     "ob_bridge", "persona", "security", "services", "utils", "xingye_bot",
 }
 CORE_VERSIONS = {
@@ -83,7 +83,12 @@ class _BusinessImportGuard(MetaPathFinder):
 class _PackageEnvironment:
     def __init__(self, second_install):
         self.installs = {PACKAGE_A: ROOT, PACKAGE_B: second_install}
-        self.real_modules = {package + ".main" for package in PACKAGES}
+        self.real_modules = {package + child for package in PACKAGES
+                             for child in (".main", "._runtime")}
+        # Host API stand-in returns paths only: no production profile is created.
+        self.data_root = second_install.parent / "host-data"
+        self.plugin_data_dirs = {package: self.data_root / package.rsplit(".", 1)[-1]
+                                 for package in PACKAGES}
         self.unexpected_imports = []
         self.loaded_mains = []
         self.logger = Mock()
@@ -113,6 +118,8 @@ class _PackageEnvironment:
         star = self.install(_module("astrbot.api.star"))
         star.Context = object
         star.Star = type("Star", (), {"__init__": lambda self, context: None})
+        self.star_tools = SimpleNamespace(get_data_dir=Mock())
+        star.StarTools = self.star_tools
         for name in ("openai", "pydantic", "httpx", "qrcode", "docx", "reportlab",
                      "PIL", "socksio"):
             self.install(_module(name))
@@ -135,6 +142,7 @@ class _PackageEnvironment:
         self.foreign_bridge.apply_astrbot_config = Mock()
         self.foreign_display = self.install(_module("utils.display"))
         self.foreign_display.log = Mock()
+        self.foreign_display.log_exception = Mock()
         self.foreign_cli_config = deepcopy(self.foreign_cli.config)
         self.foreign_core_config = deepcopy(self.foreign_config.config)
 
@@ -149,6 +157,10 @@ class _PackageEnvironment:
         main = importlib.import_module(package + ".main")
         self.loaded_mains.append(main)
         return main
+
+    def construct_bot(self, main, config=None):
+        self.star_tools.get_data_dir.return_value = self.plugin_data_dirs[main.__package__]
+        return main.BilibiliLearningBot(None, config)
 
     def install_package(self, package, child):
         name = package + "." + child
@@ -172,15 +184,31 @@ class _PackageEnvironment:
 
         brain = self.install(_module(package + ".brain.agent_brain"))
         brain.AgentBrain = Mock(return_value=SimpleNamespace(run=run))
+        self.install_package(package, "utils")
+        display = self.install(_module(package + ".utils.display"))
+        display.log = Mock()
+        display.log_exception = Mock()
         bridge = None
         if with_bridge:
             self.install_package(package, "core")
             bridge = self.install(_module(package + ".core.astrbot_config_bridge"))
             bridge.apply_astrbot_config = Mock()
-        return SimpleNamespace(app=app, brain=brain, bridge=bridge, finished=finished)
+        return SimpleNamespace(app=app, brain=brain, bridge=bridge,
+                               display=display, finished=finished)
 
     def load_real_bridge(self, package):
         self.install_package(package, "core")
+        user_data = self.install(_module(package + ".core.user_data"))
+        user_data.USER_DATA_DIR = root = self.plugin_data_dirs[package].resolve()
+
+        def managed_file_path(value):
+            path = Path(value)
+            resolved = (path if path.is_absolute() else root / path).resolve()
+            if not resolved.is_relative_to(root):
+                raise ValueError("Fixture path must remain inside its temporary profile")
+            return resolved
+
+        user_data.managed_file_path = managed_file_path
         name = package + ".core.astrbot_config_bridge"
         self.real_modules.add(name)
         return importlib.import_module(name)
@@ -216,6 +244,8 @@ class _PackageEnvironment:
         self.foreign_cli._release_bot_lock.assert_not_called()
         self.foreign_bridge.apply_astrbot_config.assert_not_called()
         self.foreign_display.log.assert_not_called()
+        self.foreign_display.log_exception.assert_not_called()
+        test.assertFalse(self.data_root.exists(), "Lazy entry created host user data")
 
 
 @contextmanager
@@ -224,7 +254,7 @@ def _package_environment():
         # Copy source files only, never real settings, user data, or dependencies.
         temporary = Path(stack.enter_context(tempfile.TemporaryDirectory()))
         second = temporary / "different-install" / "fixture_b"
-        for filename in ("__init__.py", "main.py", "core/astrbot_config_bridge.py"):
+        for filename in ("__init__.py", "main.py", "_runtime.py", "core/astrbot_config_bridge.py"):
             target = second / filename
             target.parent.mkdir(parents=True, exist_ok=True)
             shutil.copyfile(ROOT / filename, target)
@@ -267,6 +297,8 @@ class PackageImportTests(_PackageTestMixin, unittest.TestCase):
         mains = []
         for package in PACKAGES:
             with self.subTest(package=package):
+                get_data_dir = self.environment.star_tools.get_data_dir
+                get_data_dir.reset_mock()
                 main = self.environment.load_main(package)
                 mains.append(main)
                 self.assertEqual(main.__package__, package)
@@ -275,16 +307,27 @@ class PackageImportTests(_PackageTestMixin, unittest.TestCase):
                 self.assertEqual(sys.modules[package].__package__, package)
                 self.assertEqual(sys.modules[package].__path__, [str(self.environment.installs[package])])
                 self.assertEqual(main._missing_core_deps, [])
+                runtime = sys.modules[package + "._runtime"]
+                self.assertIs(main._runtime, runtime)
+                self.assertEqual(runtime.__package__, package)
+                self.assertFalse(runtime.plugin_mode)
+                self.assertIsNone(runtime.data_root)
+                get_data_dir.assert_not_called()
                 for config in (None, {"use_astrbot_config": True}):
-                    bot = main.BilibiliLearningBot(None, config)
+                    bot = self.environment.construct_bot(main, config)
                     self.assertIs(bot.config, config)
+                    self.assertTrue(runtime.plugin_mode)
+                    self.assertEqual(runtime.data_root, self.environment.plugin_data_dirs[package].resolve())
+                self.assertEqual(get_data_dir.call_args_list, [call(runtime.PLUGIN_NAME)] * 2)
                 loaded = {name for name in sys.modules
                           if name == package or name.startswith(package + ".")}
-                self.assertEqual(loaded, {package, package + ".main"})
+                self.assertEqual(loaded, {package, package + ".main", package + "._runtime"})
                 self.assertIsNone(main._brain_task)
                 self.environment.assert_isolated(self)
         self.assertNotEqual(Path(mains[0].__file__).parent, Path(mains[1].__file__).parent)
         self.assertIsNot(mains[0]._brain_task_lock, mains[1]._brain_task_lock)
+        self.assertIsNot(mains[0]._runtime, mains[1]._runtime)
+        self.assertNotEqual(mains[0]._runtime.data_root, mains[1]._runtime.data_root)
 
     def test_cli_app_returns_its_qualified_stub_not_foreign_or_other_install(self):
         mains = {package: self.environment.load_main(package) for package in PACKAGES}
@@ -305,8 +348,18 @@ class PackageImportTests(_PackageTestMixin, unittest.TestCase):
         self.assertIn(prefix, sys.modules)
         self.assertEqual(sys.modules[prefix].__path__, [str(ROOT)])
         self.assertEqual({name for name in sys.modules
-                          if name == prefix or name.startswith(prefix + ".")}, {prefix})
+                          if name == prefix or name.startswith(prefix + ".")},
+                         {prefix, prefix + "._runtime"})
         self.assertNotIn("standalone_fixture", sys.modules)
+        runtime = sys.modules[prefix + "._runtime"]
+        self.assertIs(namespace["_runtime"], runtime)
+        self.assertFalse(runtime.plugin_mode)
+        self.assertIsNone(runtime.data_root)
+        bot = namespace["BilibiliLearningBot"](None)
+        self.assertIsNone(bot.config)
+        self.assertFalse(runtime.plugin_mode)
+        self.assertIsNone(runtime.data_root)
+        self.environment.star_tools.get_data_dir.assert_not_called()
         self.environment.installs[prefix] = ROOT
         app = self.environment.install_cli(prefix)
         self.assertIs(namespace["_cli_app"](), app)
@@ -316,6 +369,8 @@ class PackageImportTests(_PackageTestMixin, unittest.TestCase):
     def test_namespace_cleanup_allows_fresh_entry_and_cli_reload(self):
         first = self.environment.load_main(PACKAGE_A)
         first_package = sys.modules[PACKAGE_A]
+        self.environment.construct_bot(first)
+        first_runtime = first._runtime
         first_app = self.environment.install_cli(PACKAGE_A)
         other = self.environment.load_main(PACKAGE_B)
         other_app = self.environment.install_cli(PACKAGE_B)
@@ -328,6 +383,11 @@ class PackageImportTests(_PackageTestMixin, unittest.TestCase):
         reloaded = self.environment.load_main(PACKAGE_A)
         self.assertIsNot(reloaded, first)
         self.assertIsNot(sys.modules[PACKAGE_A], first_package)
+        self.assertIsNot(reloaded._runtime, first_runtime)
+        self.assertFalse(reloaded._runtime.plugin_mode)
+        self.assertIsNone(reloaded._runtime.data_root)
+        self.assertTrue(first_runtime.plugin_mode)
+        self.assertEqual(first_runtime.data_root, self.environment.plugin_data_dirs[PACKAGE_A].resolve())
         self.assertIsNone(reloaded._brain_task)
         self.assertIsNot(reloaded._brain_task_lock, first._brain_task_lock)
         self.assertNotIn(PACKAGE_A + ".cli", sys.modules)
@@ -352,7 +412,7 @@ class PackageStartBotTests(_PackageTestMixin, unittest.IsolatedAsyncioTestCase):
 
     async def start(self, main, config=None):
         event = SimpleNamespace(plain_result=lambda text: text)
-        bot = main.BilibiliLearningBot(None, config)
+        bot = self.environment.construct_bot(main, config)
         replies = [reply async for reply in bot.start_bot(event)]
         self.assertEqual(len(replies), 1)
         self.assertIn("已在后台启动", replies[0])
@@ -398,7 +458,7 @@ class PackageStartBotTests(_PackageTestMixin, unittest.IsolatedAsyncioTestCase):
                 panel = {"use_astrbot_config": True}
                 runtime.bridge.apply_astrbot_config.side_effect = ValueError("invalid fixture config")
                 event = SimpleNamespace(plain_result=lambda text: text)
-                bot = main.BilibiliLearningBot(None, panel)
+                bot = self.environment.construct_bot(main, panel)
                 replies = [reply async for reply in bot.start_bot(event)]
                 self.assertEqual(len(replies), 1)
                 self.assertIn("初始化失败", replies[0])

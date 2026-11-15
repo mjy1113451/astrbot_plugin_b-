@@ -24,8 +24,11 @@ from datetime import datetime
 
 from colorama import Fore, Style
 
+from .. import _runtime
+from ..utils.display import log, log_exception
+
 BASE_DIR = Path(__file__).resolve().parent.parent
-from ..core.user_data import DATA_DIR, HTML_EXPORTS_DIR
+from ..core.user_data import DATA_DIR, HTML_EXPORTS_DIR, managed_file_path
 from ..core.config import config as _core_config, resolve_knowledge_base_dir
 
 KNOWLEDGE_BASE_DIR = Path(resolve_knowledge_base_dir(_core_config))
@@ -199,7 +202,7 @@ TOOLS_QUIZ = [
 # ── 工具实现辅助函数 ──
 
 def _load_bili_cookies() -> dict:
-    cookie_file = DATA_DIR / "bilibili_cookies.json"
+    cookie_file = managed_file_path(DATA_DIR / "bilibili_cookies.json")
     if cookie_file.exists():
         try:
             with open(cookie_file, 'r', encoding='utf-8') as f:
@@ -238,7 +241,8 @@ async def _search_bilibili_agent(query: str, count: int = 8, sort_by: str = "def
                     })
                 return results
     except Exception as e:
-        return [{"error": str(e)}]
+        log_exception("学习 Agent B站搜索失败", e)
+        return [{"error": "B站搜索失败，请查看安全诊断日志。"}]
     return []
 
 
@@ -630,8 +634,7 @@ async def run_learning_agent(
     tool_handler = _make_tool_handler(session, on_finalize)
 
     if verbose:
-        print(f"{Fore.CYAN}[AGENT] 会话 {session.session_id} | 类型: {session.session_type} | "
-              f"历史消息: {len(session.messages)} 条{Style.RESET_ALL}")
+        log(f"[AGENT] 开始学习会话 | 历史消息: {len(session.messages)} 条", "INFO")
 
     # 执行 Agent 循环
     try:
@@ -641,14 +644,13 @@ async def run_learning_agent(
             temperature=0.5,
             max_tokens=4096,
             timeout=180.0,
-            verbose=verbose,
+            verbose=verbose and not _runtime.plugin_mode,
             max_tool_rounds=max_tool_rounds,
             tool_handler=tool_handler,
         )
     except Exception as e:
-        reply = f"❌ Agent 执行出错: {e}"
-        if verbose:
-            print(f"{Fore.RED}[AGENT] 错误: {e}{Style.RESET_ALL}")
+        log_exception("学习 Agent 执行失败", e)
+        reply = "Agent 执行出错，请查看安全诊断日志。"
 
     # 将 AI 回复追加到会话
     session.messages.append({"role": "assistant", "content": reply})
@@ -693,7 +695,7 @@ async def run_multi_agent_deep_dive(
 
     async def _dive_one(topic: str, idx: int) -> dict:
         if verbose:
-            print(f"{Fore.CYAN}[MULTI-AGENT] [{idx+1}/{len(topics)}] 开始探索: {topic}{Style.RESET_ALL}")
+            log(f"[MULTI-AGENT] [{idx+1}/{len(topics)}] 开始探索", "INFO")
         try:
             r = await run_deep_dive(
                 topic=topic,
@@ -704,13 +706,13 @@ async def run_multi_agent_deep_dive(
                 shortage_policy="continue",
             )
             if verbose:
-                status = "✅" if r.get("success") else "❌"
-                print(f"{Fore.GREEN if r.get('success') else Fore.RED}[MULTI-AGENT] [{idx+1}/{len(topics)}] {status} {topic}{Style.RESET_ALL}")
+                status = "完成" if r.get("success") else "失败"
+                log(f"[MULTI-AGENT] [{idx+1}/{len(topics)}] 探索{status}",
+                    "SUCCESS" if r.get("success") else "WARN")
             return {"topic": topic, "result": r}
         except Exception as e:
-            if verbose:
-                print(f"{Fore.RED}[MULTI-AGENT] [{idx+1}/{len(topics)}] ❌ {topic}: {e}{Style.RESET_ALL}")
-            return {"topic": topic, "result": {"success": False, "error": str(e)}}
+            log_exception("多主题学习探索失败", e)
+            return {"topic": topic, "result": {"success": False, "error": "探索失败，请查看安全诊断日志。"}}
 
     if parallel and len(topics) > 1:
         tasks = [_dive_one(t, i) for i, t in enumerate(topics)]
@@ -729,7 +731,7 @@ async def run_multi_agent_deep_dive(
     combined_report = ""
     if len(combined_sections) > 1:
         if verbose:
-            print(f"{Fore.CYAN}[MULTI-AGENT] 正在生成综合对比报告...{Style.RESET_ALL}")
+            log("[MULTI-AGENT] 正在生成综合对比报告", "INFO")
         combined_text = "\n\n".join(combined_sections)
         summary_prompt = f"""以下是对 {len(topics)} 个主题的学习报告摘要：
 
@@ -800,6 +802,9 @@ async def learning_agent_menu_cli(agent_type: str = "deep_dive"):
     Agent 模式 CLI 菜单。
     agent_type: "deep_dive" | "quiz"
     """
+    if _runtime.plugin_mode:
+        log("插件模式不提供交互式学习 Agent 菜单", "WARN")
+        return
     type_label = "深入了解" if agent_type == "deep_dive" else "出题考试"
     emoji = "🔬" if agent_type == "deep_dive" else "📝"
 
@@ -937,6 +942,9 @@ async def learning_agent_menu_cli(agent_type: str = "deep_dive"):
 
 async def _continue_chat_loop(session: LearningAgentSession):
     """Agent 继续对话循环"""
+    if _runtime.plugin_mode:
+        log("插件模式不提供交互式 Agent 对话", "WARN")
+        return
     while True:
         print(f"\n{Fore.CYAN}--- Agent 对话中 (会话: {session.session_id}) ---{Style.RESET_ALL}")
         print(f"  输入消息继续对话 / 输入 'done' 结束 / 输入 'retry' 重新最后一次")
@@ -963,6 +971,9 @@ async def _continue_chat_loop(session: LearningAgentSession):
 
 async def _multi_agent_menu_cli():
     """多Agent协调菜单"""
+    if _runtime.plugin_mode:
+        log("插件模式不提供交互式多 Agent 菜单", "WARN")
+        return
     print(f"\n{Fore.CYAN}{'='*60}")
     print("  🚀 多Agent协调 — 并行深入了解多个主题")
     print(f"{'='*60}{Style.RESET_ALL}")
@@ -1036,6 +1047,9 @@ async def _multi_agent_menu_cli():
 
 async def deep_dive_with_mode():
     """深入了解 — 选择一次性模式还是Agent模式"""
+    if _runtime.plugin_mode:
+        log("插件模式不提供交互式深入学习模式选择", "WARN")
+        return
     print(f"\n{Fore.CYAN}{'='*60}")
     print("  🔬 深入了解 — 选择学习模式")
     print(f"{'='*60}{Style.RESET_ALL}")
@@ -1065,6 +1079,9 @@ async def deep_dive_with_mode():
 
 async def quiz_with_mode():
     """出题考试 — 选择一次性模式还是Agent模式"""
+    if _runtime.plugin_mode:
+        log("插件模式不提供交互式出题模式选择", "WARN")
+        return
     print(f"\n{Fore.CYAN}{'='*60}")
     print("  📝 出题考试 — 选择出题模式")
     print(f"{'='*60}{Style.RESET_ALL}")

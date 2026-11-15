@@ -13,10 +13,22 @@ import shutil
 import asyncio
 import subprocess
 import contextlib
-import sys
 from pathlib import Path
 from typing import Any
 from dataclasses import dataclass, field
+
+from .. import _runtime
+from ..core.user_data import resolve_output_path
+from ..utils.display import log, log_exception
+
+
+def _asr_output_context():
+    if _runtime.plugin_mode:
+        return contextlib.nullcontext()
+    output = contextlib.ExitStack()
+    output.enter_context(contextlib.redirect_stdout(io.StringIO()))
+    output.enter_context(contextlib.redirect_stderr(io.StringIO()))
+    return output
 
 
 def _hidden_subprocess_kwargs() -> dict:
@@ -204,16 +216,9 @@ class ASREngine:
 
     def _get_model_dir(self) -> str:
         """获取 FunASR 模型目录（自动创建，供 AutoModel 下载模型）"""
-        if self.funasr_model_dir:
-            return self.funasr_model_dir
-        # 默认路径：项目下的 model/asr，自动创建目录
-        if getattr(sys, "frozen", False):
-            from ..core.user_data import USER_DATA_DIR
-            default = USER_DATA_DIR / "models" / "asr"
-        else:
-            default = Path(__file__).parent.parent / "model" / "asr"
-        os.makedirs(str(default), exist_ok=True)
-        return str(default)
+        model_dir = resolve_output_path(self.funasr_model_dir, default="models/asr")
+        model_dir.mkdir(parents=True, exist_ok=True)
+        return str(model_dir)
 
     def _check_funasr_available(self) -> bool:
         """检查 FunASR 是否可用（仅检查包是否安装，模型由 AutoModel 自动下载）"""
@@ -304,9 +309,9 @@ class ASREngine:
         _start = _time.time()
         try:
             video_path = Path(video_path)
-            out_dir = Path(output_dir) if output_dir else video_path.parent
+            out_dir = resolve_output_path(output_dir, default="temp/asr")
             out_dir.mkdir(parents=True, exist_ok=True)
-            audio_path = out_dir / f"{video_path.stem}_audio.wav"
+            audio_path = resolve_output_path(out_dir / f"{video_path.stem}_audio.wav")
 
             if audio_path.exists() and audio_path.stat().st_size > 1024:
                 return audio_path, _time.time() - _start
@@ -339,7 +344,7 @@ class ASREngine:
                 try:
                     import torchaudio
                     import torchaudio.functional as F
-                    print(f"⚠️ ffmpeg 未找到，使用 torchaudio 提取音频: {video_path.name}")
+                    log("ffmpeg 未找到，使用 torchaudio 提取音频", "WARN")
                     waveform, sample_rate = torchaudio.load(str(video_path))
                     # 转单声道
                     if waveform.shape[0] > 1:
@@ -380,26 +385,24 @@ class ASREngine:
                     model_exists = True
                     break
         if model_exists:
-            print(f"[ASR] Loading FunASR model (cached: {model_dir})...")
+            log("正在加载缓存的 FunASR 模型", "ASR")
         else:
-            print(f"[ASR] [FIRST-TIME] 首次使用，正在从 ModelScope 下载模型 (~2GB, 约5-10分钟)...")
-            print(f"[ASR]  模型缓存目录: {model_dir}")
-            print(f"[ASR]  下载进度请稍候，后续使用将跳过此步骤...")
+            log("首次使用，正在下载 FunASR 模型，请稍候", "ASR")
 
         # 设置模型缓存路径
-        os.environ["TQDM_DISABLE"] = "1"
         prev_modelscope = os.environ.get("MODELSCOPE_CACHE")
         prev_funasr = os.environ.get("FUNASR_HOME")
         prev_path = os.environ.get("PATH", "")
-        os.environ["MODELSCOPE_CACHE"] = model_dir
-        os.environ["FUNASR_HOME"] = os.path.dirname(model_dir)
+        if not _runtime.plugin_mode:
+            os.environ["MODELSCOPE_CACHE"] = model_dir
+            os.environ["FUNASR_HOME"] = os.path.dirname(model_dir)
 
         # 注入 ffmpeg 路径到 PATH，确保 FunASR 内部 _load_audio_ffmpeg 能找到
         ffmpeg_path = self._find_ffmpeg()
-        if ffmpeg_path and os.path.isfile(ffmpeg_path):
+        if not _runtime.plugin_mode and ffmpeg_path and os.path.isfile(ffmpeg_path):
             ffmpeg_dir = os.path.dirname(os.path.abspath(ffmpeg_path))
             os.environ["PATH"] = ffmpeg_dir + os.pathsep + prev_path
-            print(f"  ffmpeg path injected: {ffmpeg_dir}")
+            log("已为独立 CLI 配置 ffmpeg 路径", "ASR")
 
         try:
             model = AutoModel(
@@ -409,6 +412,8 @@ class ASREngine:
                 spk_model="cam++" if self.funasr_spk_enabled else None,
                 device="cuda" if self._check_cuda() else "cpu",
                 disable_update=True,
+                cache_dir=model_dir,
+                disable_pbar=True,
             )
             # 禁用进度条
             try:
@@ -425,19 +430,19 @@ class ASREngine:
 
             self._model = model
             self._backend_loaded = "funasr"
-            print("[ASR] FunASR model loaded (Paraformer + VAD + Punc)")
+            log("FunASR 模型加载完成", "ASR")
             return model
         finally:
-            if prev_modelscope is not None:
-                os.environ["MODELSCOPE_CACHE"] = prev_modelscope
-            else:
-                os.environ.pop("MODELSCOPE_CACHE", None)
-            if prev_funasr is not None:
-                os.environ["FUNASR_HOME"] = prev_funasr
-            else:
-                os.environ.pop("FUNASR_HOME", None)
-            # 恢复 PATH
-            os.environ["PATH"] = prev_path
+            if not _runtime.plugin_mode:
+                if prev_modelscope is not None:
+                    os.environ["MODELSCOPE_CACHE"] = prev_modelscope
+                else:
+                    os.environ.pop("MODELSCOPE_CACHE", None)
+                if prev_funasr is not None:
+                    os.environ["FUNASR_HOME"] = prev_funasr
+                else:
+                    os.environ.pop("FUNASR_HOME", None)
+                os.environ["PATH"] = prev_path
 
     def _check_cuda(self) -> bool:
         """检查 CUDA 是否可用"""
@@ -445,7 +450,7 @@ class ASREngine:
             import torch
             return torch.cuda.is_available()
         except Exception as e:
-            print(f"[ASR] CUDA检查失败: {e}")
+            log_exception("ASR CUDA 检查失败", e)
             return False
 
     def _transcribe_funasr_core(self, audio_path: Path) -> ASRResult:
@@ -455,7 +460,7 @@ class ASREngine:
         except Exception:
             duration = 0
         try:
-            with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
+            with _asr_output_context():
                 result = self._model.generate(
                     input=str(audio_path),
                     batch_size_s=self.funasr_batch_size_s,
@@ -556,7 +561,9 @@ class ASREngine:
             length = min(chunk_s + 3, duration - start)
             if length <= 0:
                 break
-            chunk_path = audio_path.parent / f"{audio_path.stem}_c{i}.wav"
+            chunk_dir = resolve_output_path("temp/asr")
+            chunk_dir.mkdir(parents=True, exist_ok=True)
+            chunk_path = resolve_output_path(chunk_dir / f"{audio_path.stem}_c{i}.wav")
             cmd = [
                 ffmpeg, "-y", "-hide_banner", "-loglevel", "error",
                 "-i", str(audio_path), "-ss", str(start), "-t", str(length),
@@ -579,17 +586,18 @@ class ASREngine:
                 except OSError: pass
             return self._transcribe_funasr_core(audio_path)
 
-        print(f"[ASR] ⚡ 并行模式: {duration:.0f}s音频 → {len(chunk_info)}块×{len(chunk_info)}线程...")
+        log(f"并行识别 {duration:.0f}s 音频，共 {len(chunk_info)} 块", "ASR")
 
         model = self._model
         _saved_omp = os.environ.get("OMP_NUM_THREADS", "")
         _saved_mkl = os.environ.get("MKL_NUM_THREADS", "")
 
         def _process_one(chunk_path, idx):
-            os.environ["OMP_NUM_THREADS"] = "1"
-            os.environ["MKL_NUM_THREADS"] = "1"
+            if not _runtime.plugin_mode:
+                os.environ["OMP_NUM_THREADS"] = "1"
+                os.environ["MKL_NUM_THREADS"] = "1"
             try:
-                with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
+                with _asr_output_context():
                     result = model.generate(
                         input=str(chunk_path),
                         batch_size_s=self.funasr_batch_size_s,
@@ -614,7 +622,7 @@ class ASREngine:
                         segments.append(s)
                 return segments
             except Exception as e:
-                print(f"[ASR] 并行块 {idx} 失败: {e}")
+                log_exception("ASR 并行块识别失败", e)
                 return None
 
         all_segments = []
@@ -634,20 +642,20 @@ class ASREngine:
                             seg.end += start_offset
                         all_segments.extend(chunk_segs)
                 except Exception as e:
-                    print(f"[ASR] 并行块超时/异常: {e}")
+                    log_exception("ASR 并行块超时或失败", e)
                 finally:
                     try: chunk_path.unlink(missing_ok=True)
                     except OSError: pass
 
-        # 恢复环境变量
-        if _saved_omp:
-            os.environ["OMP_NUM_THREADS"] = _saved_omp
-        else:
-            os.environ.pop("OMP_NUM_THREADS", None)
-        if _saved_mkl:
-            os.environ["MKL_NUM_THREADS"] = _saved_mkl
-        else:
-            os.environ.pop("MKL_NUM_THREADS", None)
+        if not _runtime.plugin_mode:
+            if _saved_omp:
+                os.environ["OMP_NUM_THREADS"] = _saved_omp
+            else:
+                os.environ.pop("OMP_NUM_THREADS", None)
+            if _saved_mkl:
+                os.environ["MKL_NUM_THREADS"] = _saved_mkl
+            else:
+                os.environ.pop("MKL_NUM_THREADS", None)
 
         all_segments.sort(key=lambda s: s.start)
         deduped = []
@@ -716,7 +724,7 @@ class ASREngine:
         # ── 确保 ffmpeg 在 PATH ──
         ffmpeg_path = self._find_ffmpeg()
         prev_path = os.environ.get("PATH", "")
-        if ffmpeg_path and os.path.isfile(ffmpeg_path):
+        if not _runtime.plugin_mode and ffmpeg_path and os.path.isfile(ffmpeg_path):
             ffmpeg_dir = os.path.dirname(os.path.abspath(ffmpeg_path))
             os.environ["PATH"] = ffmpeg_dir + os.pathsep + prev_path
 
@@ -731,7 +739,8 @@ class ASREngine:
             else:
                 result = self._transcribe_funasr_core(audio_path)
         finally:
-            os.environ["PATH"] = prev_path
+            if not _runtime.plugin_mode:
+                os.environ["PATH"] = prev_path
         
         result.timing["transcribe_seconds"] = _time.time() - _t_start
         return result
@@ -779,8 +788,11 @@ class ASREngine:
 
         try:
             if self._model is None or self._backend_loaded != "whisper":
-                print(f"🎙️ 正在加载 Whisper 模型: {self.whisper_model_name}")
-                self._model = whisper.load_model(self.whisper_model_name, device=self.device)
+                log("正在加载 Whisper 模型", "ASR")
+                download_dir = resolve_output_path("cache/whisper")
+                download_dir.mkdir(parents=True, exist_ok=True)
+                self._model = whisper.load_model(self.whisper_model_name, device=self.device,
+                                                 download_root=str(download_dir))
                 self._backend_loaded = "whisper"
 
             result = self._model.transcribe(
@@ -847,9 +859,12 @@ class ASREngine:
 
         try:
             hf_token = os.environ.get("HF_TOKEN") or os.environ.get("HUGGINGFACE_TOKEN")
+            cache_dir = resolve_output_path("cache/pyannote")
+            cache_dir.mkdir(parents=True, exist_ok=True)
             pipeline = Pipeline.from_pretrained(
                 "pyannote/speaker-diarization-3.1",
                 use_auth_token=hf_token,
+                cache_dir=str(cache_dir),
             )
             if self.device != "cpu":
                 import torch
@@ -862,7 +877,7 @@ class ASREngine:
                         seg.speaker = speaker
             return segments
         except Exception as e:
-            print(f"[WARN] Speaker separation failed (non-critical): {e}")
+            log_exception("ASR 说话人分离失败", e)
             return segments
 
     # ═══════════════════════════════════════════════════════════════
@@ -931,7 +946,7 @@ class ASREngine:
             result = await loop.run_in_executor(None, self.transcribe_funasr, audio_path)
         else:
             if self.backend == "funasr":
-                print("[WARN] FunASR unavailable, falling back to Whisper")
+                log("FunASR 不可用，回退到 Whisper", "WARN")
             result = await loop.run_in_executor(None, self.transcribe_whisper, audio_path)
 
         # 3. 说话人分离（仅 Whisper 需要额外处理）

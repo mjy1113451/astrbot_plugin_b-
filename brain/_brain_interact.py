@@ -8,7 +8,7 @@ import json
 import asyncio
 
 from ._mixin_imports import *
-from ..utils.helpers import _mask_urls
+from ..utils.display import log_exception
 
 
 class BrainInteractMixin:
@@ -59,7 +59,7 @@ class BrainInteractMixin:
                 desc = content[:15]
             return desc, score
         except Exception as e:
-            log(f"封面分析失败(已重试): {_mask_urls(str(e)[:80])}", "WARN")
+            log_exception("封面分析失败(已重试)", e)
             return "分析失败", 0
 
     async def judge_interest_with_ai(self, title, up, vis_desc, vis_score,
@@ -152,7 +152,7 @@ UP主: {up}
             all_matched = list(dict.fromkeys(result.matched_keywords + ai_matched))
             return bool(data.get("interested")), all_matched, reason
         except Exception as e:
-            log(f"AI兴趣判断失败(已重试)，退回关键词判断: {str(e)[:80]}", "WARN")
+            log_exception("AI兴趣判断失败(已重试)，退回关键词判断", e)
             return len(result.matched_keywords) > 0, result.matched_keywords, "关键词未匹配"
 
     async def _get_comments_context(self, aid: int):
@@ -241,12 +241,9 @@ UP主: {up}
                 except Exception as exc:
                     last_error = exc
                     if attempt == 0:
-                        log(
-                            f"评论图片下载重试(cid={cid} img{index}, {'缩小图' if candidate_index else '原图'}): {exc}",
-                            "DEBUG",
-                        )
+                        log_exception("评论图片下载失败，将重试", exc)
                         await asyncio.sleep(0.6)
-        raise RuntimeError(f"comment image download failed after retries: {last_error}")
+        raise RuntimeError("comment image download failed after retries") from last_error
 
     async def _analyze_comment_images(self, cid, img_urls, user_msg=""):
         """[VISION] 下载评论文图片并用视觉AI描述，同时展示评论文字+图片"""
@@ -276,7 +273,7 @@ UP主: {up}
                 desc = resp.choices[0].message.content.strip()[:80]
                 return f"[图{idx+1}]{desc}"
             except Exception as e:
-                log(f"评论图片分析失败(cid={cid} img{idx}): {e}", "DEBUG")
+                log_exception("评论图片分析失败", e)
                 return None
 
         # [SPEED] 并行下载+分析所有图片
@@ -284,6 +281,5 @@ UP主: {up}
         results = await asyncio.gather(*tasks, return_exceptions=True)
         analyzed = [r for r in results if isinstance(r, str)]
         if analyzed:
-            msg_preview = user_msg[:40] + "..." if len(user_msg) > 40 else user_msg
-            log(f"[EYE] 评论({msg_preview}) + 附图({len(analyzed)}张): {'; '.join(analyzed)}", "EYE")
+            log(f"[EYE] 评论附图分析完成 ({len(analyzed)}张)", "EYE")
         return "; ".join(analyzed)

@@ -6,12 +6,10 @@ import html
 import json
 import os
 import re
-import sys
 from pathlib import Path
 from typing import Any
 
-BASE_DIR = Path(__file__).resolve().parent.parent
-from ..core.user_data import MINDMAPS_DIR
+from ..core.user_data import MINDMAPS_DIR, resolve_output_path
 
 DEFAULT_OUTPUT_DIR = MINDMAPS_DIR
 
@@ -191,10 +189,7 @@ def export_mindmap(markdown_path: str | os.PathLike[str], output_dir: str | os.P
     if not path.exists():
         raise FileNotFoundError(str(path))
     opts = (cfg or {}).get("mindmap", {}) if isinstance(cfg, dict) else {}
-    out_dir = Path(output_dir or opts.get("output_dir") or DEFAULT_OUTPUT_DIR)
-    if not out_dir.is_absolute():
-        # Frozen releases run from a read-only _internal directory.
-        out_dir = MINDMAPS_DIR if getattr(sys, "frozen", False) else BASE_DIR / out_dir
+    out_dir = resolve_output_path(output_dir or opts.get("output_dir"), default=DEFAULT_OUTPUT_DIR)
     out_dir.mkdir(parents=True, exist_ok=True)
     markdown = path.read_text(encoding="utf-8", errors="replace")
     # 可选/强制 AI 大纲增强（受 mindmap.prompt / mindmap.require_ai 驱动）
@@ -205,6 +200,6 @@ def export_mindmap(markdown_path: str | os.PathLike[str], output_dir: str | os.P
     max_depth = int(opts.get("max_depth", 3) or 3)
     include_images = bool(opts.get("include_images", True))
     html_text = markdown_to_mindmap_html(markdown, title=title, theme=theme, max_depth=max_depth, include_images=include_images)
-    out_path = out_dir / f"{_sanitize_filename(title)}.mindmap.html"
+    out_path = resolve_output_path(out_dir / f"{_sanitize_filename(title)}.mindmap.html")
     out_path.write_text(html_text, encoding="utf-8")
     return str(out_path)

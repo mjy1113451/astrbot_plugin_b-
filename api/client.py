@@ -15,8 +15,8 @@ from bilibili_api.comment import CommentResourceType
 from bilibili_api.video import Video
 
 from ..core.config import COOKIE_FILE
-from ..utils.display import log
-from ..utils.helpers import _mask_urls
+from ..core.user_data import managed_file_path, write_private_json
+from ..utils.display import log, log_exception
 from .throttle import _bili_throttle, _bili_trigger_cooldown
 
 class BiliClient:
@@ -37,12 +37,12 @@ class BiliClient:
         self._recommendation_cache_ttl = 300
 
     def _load_credential(self):
-        if not os.path.exists(COOKIE_FILE):
-            log("Cookie文件不存在，需要登录", "LOGIN")
-            return None
-
         try:
-            with open(COOKIE_FILE, 'r', encoding='utf-8') as f:
+            path = managed_file_path(COOKIE_FILE)
+            if not path.exists():
+                log("Cookie文件不存在，需要登录", "LOGIN")
+                return None
+            with path.open('r', encoding='utf-8') as f:
                 cookies = json.load(f)
             self.raw_cookies = cookies
 
@@ -59,20 +59,17 @@ class BiliClient:
             ))
             if not buvid3_valid:
                 if buvid3:
-                    log(f"检测到畸形 buvid3（{buvid3[:20]}...），重新生成...", "WARN")
+                    log("检测到畸形 buvid3，重新生成...", "WARN")
                 else:
                     log("自动补全 buvid3...", "WARN")
                 buvid3 = str(_uuid_mod.uuid1()) + "infoc"
                 self.raw_cookies['buvid3'] = buvid3
                 try:
                     cookies['buvid3'] = buvid3
-                    tmp = COOKIE_FILE + '.tmp'
-                    with open(tmp, 'w', encoding='utf-8') as f:
-                        json.dump(cookies, f, ensure_ascii=False, indent=2)
-                    os.replace(tmp, COOKIE_FILE)
-                    log(f"buvid3 已写入 cookie 文件: {buvid3}", "SUCCESS")
+                    write_private_json(COOKIE_FILE, cookies)
+                    log("buvid3 已写入凭据文件", "SUCCESS")
                 except Exception as e:
-                    log(f"[WARN] buvid3写入失败: {e}", "WARN")
+                    log_exception("buvid3 写入失败", e)
 
             if len(sessdata) < 10:
                 log("SESSDATA格式错误，需要重新登录", "ERROR")
@@ -90,7 +87,7 @@ class BiliClient:
                 self.uid = None
             return self.credential
         except Exception as e:
-            log(f"读取Cookie失败: {e}", "ERROR")
+            log_exception("读取B站凭据失败", e)
             return None
     async def init_user_info(self):
         if not self.credential:
@@ -119,7 +116,7 @@ class BiliClient:
                         _logged = True
                     await asyncio.sleep(wait)
                 else:
-                    log(f"登录验证失败: {e}", "ERROR")
+                    log_exception("登录验证失败", e)
                     return False
         return False
 
@@ -165,7 +162,7 @@ class BiliClient:
                     self._wbi_keys_ts = time.time()
                     return True
         except Exception as e:
-            log(f"WBI 密钥刷新失败: {e}", "WARN")
+            log_exception("WBI 密钥刷新失败", e)
         return False
 
     def _wbi_sign(self, params: dict) -> dict:
@@ -271,7 +268,8 @@ class BiliClient:
                 elif self._is_transient_network_error(e) or isinstance(e, asyncio.TimeoutError):
                     if attempt < network_attempts - 1:
                         wait = 2 ** attempt
-                        log(f"[WARN] 推荐流网络异常，{wait}s 后重试 ({attempt + 1}/{network_attempts}): {err_msg[:80]}", "WARN")
+                        log(f"[WARN] 推荐流网络异常，{wait}s 后重试 ({attempt + 1}/{network_attempts})", "WARN")
+                        log_exception("推荐流网络请求失败", e)
                         await asyncio.sleep(wait)
                         continue
                     cached = self._cached_recommendations()
@@ -282,7 +280,7 @@ class BiliClient:
                     log("[WARN] 推荐流网络暂不可用，稍后会自动重试，不影响当前视频分析", "WARN")
                     return []
                 else:
-                    log(f"获取推荐失败: {e}", "ERROR")
+                    log_exception("获取推荐失败", e)
                     return []
         return []
 
@@ -316,7 +314,7 @@ class BiliClient:
                     log(f"评论区已关闭 (aid={aid}, 错误码12002)", "INFO")
                     return []
                 else:
-                    log(f"获取评论失败 (aid={aid}): {_mask_urls(str(e)[:120])}", "ERROR")
+                    log_exception("获取评论失败", e)
                     return []
         return []
 
@@ -541,7 +539,7 @@ class BiliClient:
                     break
             return videos
         except Exception as e:
-            log(f"搜索B站视频失败: {e}", "WARN")
+            log_exception("搜索B站视频失败", e)
             return []
 
     # ── [MSG] 弹幕相关 ──────────────────────────────────────────────────
@@ -573,7 +571,7 @@ class BiliClient:
                 self._set_cached_meta(bvid, meta)
                 return meta
         except Exception as e:
-            log(f"获取视频元数据失败: {e}", "WARN")
+            log_exception("获取视频元数据失败", e)
         return {}
 
     async def get_danmakus(self, bvid: str, limit: int = 40):
@@ -632,7 +630,7 @@ class BiliClient:
             random.shuffle(all_danmakus)
             return (cid, all_danmakus[:limit])
         except Exception as e:
-            log(f"获取弹幕异常: {e}", "WARN")
+            log_exception("获取弹幕异常", e)
             return (0, [])
 
     @staticmethod
@@ -744,7 +742,7 @@ class BiliClient:
                         await v.like_danmaku(dmid=dmid, cid=cid)
                         return {"code": 0, "msg": f"弹幕 {dmid[:12]}... 点赞成功"}
                 except Exception as e:
-                    log(f"[WARN] bilibili_api弹幕点赞降级到httpx: {e}", "WARN")
+                    log_exception("bilibili_api 弹幕点赞失败，降级到 httpx", e)
 
             # 降级：直接用 httpx + cookies
             if not self.raw_cookies:

@@ -1,5 +1,6 @@
 """brain/_brain_auto.py — AgentBrain 自动日记/进化/Agent任务 mixin"""
 from ._mixin_imports import *
+from ..utils.display import log_exception
 
 class BrainAutoMixin:
     """自动日记、自我进化、Agent目标执行、深度搜索主题选择"""
@@ -27,7 +28,7 @@ class BrainAutoMixin:
 
             return True
         except Exception as e:
-            log(f"自动日记生成失败: {e}", "WARN")
+            log_exception("自动日记生成失败", e)
             return False
 
     async def maybe_self_evolve(self, force=False):
@@ -71,7 +72,7 @@ class BrainAutoMixin:
 
             return True
         except Exception as e:
-            log(f"自我进化失败: {e}", "WARN")
+            log_exception("自我进化失败", e)
             return False
 
     async def maybe_run_agent_goal(self, goal, score=0, force=False):
@@ -90,7 +91,7 @@ class BrainAutoMixin:
             log(f"Agent执行完成: {ok_steps}/{len(run.get('results', []))} 个步骤成功", "SUCCESS")
             return True
         except Exception as e:
-            log(f"Agent执行失败: {e}", "WARN")
+            log_exception("Agent执行失败", e)
             return False
 
     async def _agent_goal_async(self, goal, score=0):
@@ -113,7 +114,7 @@ class BrainAutoMixin:
         except asyncio.TimeoutError:
             log(f"🤖 Agent后台探索超时，已跳过", "WARN")
         except Exception as e:
-            log(f"🤖 Agent后台异常: {e}", "WARN")
+            log_exception("Agent后台异常", e)
         finally:
             self._agent_goal_running = False
 
@@ -139,7 +140,7 @@ class BrainAutoMixin:
                     if os.path.isdir(dpath) and d not in ("未分类",):
                         topics.append(f"继续学习{d}领域的新知识")
             except OSError as e:
-                log(f'文件操作失败: {e}', 'DEBUG')
+                log_exception("读取深度搜索主题失败", e)
         if self.memory.get("known_ups"):
             up = random.choice(list(self.memory["known_ups"].keys())[:5])
             topics.append(f"搜索了解UP主{up}的视频风格和代表作")

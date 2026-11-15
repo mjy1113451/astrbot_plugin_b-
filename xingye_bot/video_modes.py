@@ -17,6 +17,7 @@ import httpx
 from .llm import ModelClient
 from .settings import BotSettings, DATA_DIR
 from ..utils.subtitles import subtitle_priority
+from ..core.user_data import resolve_output_path
 
 from .grid_frames import (
     extract_visual_note_grids,
@@ -104,9 +105,7 @@ class VideoUnderstanding:
     @property
     def download_root(self) -> Path:
         configured = (self.settings.video_download_dir or "").strip()
-        if not configured:
-            return CACHE_DIR
-        return Path(configured).expanduser()
+        return resolve_output_path(configured, CACHE_DIR)
 
     # ═══════════════════════════════════════════════════════════════
     # 🔐 WBI 签名（防 B站 API 返回错误字幕数据）

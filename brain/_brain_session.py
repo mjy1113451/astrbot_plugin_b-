@@ -1,5 +1,8 @@
 """brain/_brain_session.py — AgentBrain 会话管理 mixin (能量/评论/私信/弹幕/UP关注/登录)"""
 from ._mixin_imports import *
+from .. import _runtime
+from ..utils.display import log_exception
+from ..core.user_data import managed_file_path
 from ..api.throttle import _bili_throttle
 from ..core.platform_actions import public_commenting_enabled
 from ..core.time_policy import is_quiet_period
@@ -15,9 +18,9 @@ class BrainSessionMixin:
             if res.get('code') == 0:
                 log("已同步观看历史 (手机可见)", "NOTE")
             else:
-                log(f"历史记录同步失败: {res.get('message')}", "WARN")
+                log("历史记录同步失败，平台未接受上报", "WARN")
         except Exception as e:
-            log(f"上报历史时异常: {e}", "ERROR")
+            log_exception("上报历史时异常", e)
         await asyncio.sleep(sec)
 
     async def energy_recovery_session(self):
@@ -55,7 +58,7 @@ class BrainSessionMixin:
                 log(f"评论互动消耗 {processed} 点精力，剩余: {self.energy}%", "ENERGY")
             return processed
         except Exception as e:
-            log(f"检查评论失败: {e}", "ERROR")
+            log_exception("检查评论失败", e)
             return 0
         finally:
             self.last_comment_check = now
@@ -74,7 +77,7 @@ class BrainSessionMixin:
                 log(f"本次处理了 {processed} 条私信", "DM")
             return processed
         except Exception as e:
-            log(f"检查私信失败: {e}", "ERROR")
+            log_exception("检查私信失败", e)
             return 0
         finally:
             self.last_private_message_check = now
@@ -90,7 +93,7 @@ class BrainSessionMixin:
             from .monitor import MonitorBot, load_monitor_config
             monitor_cfg = load_monitor_config()
         except Exception as exc:
-            log(f"[Ntf] 读取 @我监听配置失败: {exc}", "DEBUG")
+            log_exception("读取 @我监听配置失败", exc)
             return 0
 
         if not monitor_cfg.get("enabled", True) or not monitor_cfg.get("at_mentions_enabled", True):
@@ -116,7 +119,7 @@ class BrainSessionMixin:
             log("[Ntf] 正常刷视频模式：正在检查评论区 @我提醒...", "MENTION")
             return await watcher._check_mentions()
         except Exception as exc:
-            log(f"[Ntf] @我提醒处理失败: {exc}", "WARN")
+            log_exception("@我提醒处理失败", exc)
             return 0
 
     # ── 看完视频后检查通知 (@我/私信/自己评论) ──
@@ -148,7 +151,7 @@ class BrainSessionMixin:
                 if at_count > 0:
                     log(f"[Ntf] @通知: 发现 {at_count} 条新@提及", "NOTIFY")
             except Exception as e:
-                log(f"[Ntf] @通知检查异常: {e}", "WARN")
+                log_exception("[Ntf] @通知检查异常", e)
 
         # ── 2. 检查私信（强制检查，忽略冷却） ──
         if PER_VIDEO_CHECK_PRIVATE_MESSAGES and PRIVATE_MESSAGE_ENABLED:
@@ -162,7 +165,7 @@ class BrainSessionMixin:
                 if dm_count > 0:
                     log(f"[Ntf] 私信: 处理了 {dm_count} 条新私信", "NOTIFY")
             except Exception as e:
-                log(f"[Ntf] 私信检查异常: {e}", "WARN")
+                log_exception("[Ntf] 私信检查异常", e)
 
         # ── 3. 检查自己视频评论（强制检查，忽略冷却） ──
         if PER_VIDEO_CHECK_OWN_COMMENTS and COMMENT_CHECK_ENABLED:
@@ -175,7 +178,7 @@ class BrainSessionMixin:
                 if comment_count > 0:
                     log(f"[Ntf] 评论: 处理了 {comment_count} 条新评论", "NOTIFY")
             except Exception as e:
-                log(f"[Ntf] 评论检查异常: {e}", "WARN")
+                log_exception("[Ntf] 评论检查异常", e)
 
     async def _check_at_notifications_quick(self) -> int:
         """快速检查@我通知（轻量版，复用 standby.py 逻辑）。
@@ -247,7 +250,7 @@ class BrainSessionMixin:
 
                 return new_count
         except Exception as e:
-            log(f"[Ntf] @通知API调用失败: {e}", "DEBUG")
+            log_exception("[Ntf] @通知API调用失败", e)
             return 0
 
     # ── 主动聊天 ──
@@ -297,7 +300,7 @@ class BrainSessionMixin:
             log(f"[MSG] 主动发起聊天 @{target_name}", "CHAT")
             await self._compose_active_chat(target_uid, target_name, target)
         except Exception as e:
-            log(f"主动聊天异常: {e}", "WARN")
+            log_exception("主动聊天异常", e)
 
     async def _compose_active_chat(self, target_uid, target_name, target):
         try:
@@ -366,7 +369,7 @@ class BrainSessionMixin:
                 content=chat_text[:120]
             )
         except Exception as e:
-            log(f"主动聊天失败: {e}", "WARN")
+            log_exception("主动聊天失败", e)
 
     # ── [*] UP主关注 ──
     def _reset_daily_follows(self):
@@ -490,9 +493,9 @@ class BrainSessionMixin:
                 log(f"已关注过 UP主 @{up_name} (之前已关注，已同步记录)", "INFO")
                 return True
             else:
-                log(f"关注失败: {result.get('msg')}", "WARN")
+                log("关注失败，平台未接受操作", "WARN")
         except Exception as e:
-            log(f"关注 UP主异常: {e}", "WARN")
+            log_exception("关注 UP主异常", e)
         return False
 
     async def maybe_browse_up_videos(self, force_up_uid=None, up_name_hint=None):
@@ -557,7 +560,7 @@ class BrainSessionMixin:
             else:
                 log("该UP主暂无视频或获取失败", "INFO")
         except Exception as e:
-            log(f"浏览UP主视频异常: {e}", "WARN")
+            log_exception("浏览UP主视频异常", e)
         return None
 
     # ── [MSG] 弹幕互动 ──
@@ -596,7 +599,7 @@ class BrainSessionMixin:
                 await self.maybe_send_danmaku(bvid)
                 return danmaku_list
         except Exception as e:
-            log(f"读取弹幕异常: {e}", "WARN")
+            log_exception("读取弹幕异常", e)
         return []
 
     async def maybe_like_danmaku(self, bvid: str, danmaku_list: list, cid: int = 0):
@@ -634,9 +637,9 @@ class BrainSessionMixin:
                 log(f"弹幕点赞成功！今日已赞 {self.daily_danmaku_likes}/{daily_limit}", "SUCCESS")
                 return True
             else:
-                log(f"弹幕点赞未成功: {result.get('msg')}", "INFO")
+                log("弹幕点赞未成功，平台未接受操作", "INFO")
         except Exception as e:
-            log(f"弹幕点赞异常: {e}", "WARN")
+            log_exception("弹幕点赞异常", e)
         return False
 
     async def maybe_send_danmaku(self, bvid: str, title: str = "", subtitle_text: str = ""):
@@ -684,7 +687,7 @@ class BrainSessionMixin:
                 )
                 log("AI 弹幕建议已进入行为审核，等待用户决定", "INFO")
                 return False
-            log(f"📤 发送弹幕: {dm_text}", "DANMAKU")
+            log("准备发送弹幕", "DANMAKU")
             result = await self.bili.send_danmaku(bvid, dm_text)
             if result.get("code") == 0:
                 self.daily_danmaku_sent += 1
@@ -692,15 +695,15 @@ class BrainSessionMixin:
                 self.record_session_event("send_danmaku", bvid=bvid, text=dm_text)
                 return True
             else:
-                log(f"弹幕发送失败: {result.get('msg')}", "WARN")
+                log("弹幕发送失败，平台未接受操作", "WARN")
         except Exception as e:
-            log(f"弹幕发送异常: {e}", "WARN")
+            log_exception("弹幕发送异常", e)
         return False
 
     async def initialize_login(self):
         self.bili.credential = self.bili._load_credential()
         if self.bili.credential and os.path.exists(COOKIE_FILE):
-            with open(COOKIE_FILE, 'r', encoding='utf-8') as f:
+            with managed_file_path(COOKIE_FILE).open('r', encoding='utf-8') as f:
                 self.cookies = json.load(f)
             self.credential = self.bili.credential
             try:
@@ -716,6 +719,9 @@ class BrainSessionMixin:
                 previous_seen_at=self.previous_seen_at
             )
             return True
+        if _runtime.plugin_mode:
+            log("B站凭据不可用，请先配置登录凭据；插件不会启动交互登录向导", "WARN")
+            return False
         log("需要登录B站账号", "LOGIN")
         print("\n" + "="*50)
         print("           B站登录向导")
@@ -732,7 +738,7 @@ class BrainSessionMixin:
         if not login_success:
             log("登录验证失败", "ERROR")
             return False
-        with open(COOKIE_FILE, 'r', encoding='utf-8') as f:
+        with managed_file_path(COOKIE_FILE).open('r', encoding='utf-8') as f:
             self.cookies = json.load(f)
         self.credential = Credential(
             sessdata=self.cookies.get("SESSDATA"),
@@ -760,6 +766,6 @@ class BrainSessionMixin:
             status = "[PSYCHO]已激活" if PSYCHO_ENGINE_ENABLED else "[NOTE]仅追踪(无AI分析)"
             log(f"智能分析系统 {status} | 多维度追踪已激活", "SUCCESS")
         except Exception as e:
-            log(f"智能分析系统初始化失败: {e}", "ERROR")
+            log_exception("智能分析系统初始化失败", e)
             self.psycho_profile = None
             self.recommend_engine = None

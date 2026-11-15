@@ -9,13 +9,16 @@ import json
 import hashlib, base64, secrets
 from colorama import Fore, Style
 from ..utils.storage import get_backup_dir
-from ..utils.display import mask_secret
+from ..utils.display import mask_secret, log, log_exception
 from .user_data import (
     DATA_DIR as _USER_DATA_DIR,
     HIGHLIGHTS_DIR as _USER_HIGHLIGHTS_DIR,
     KNOWLEDGE_BASE_DIR as _USER_KNOWLEDGE_BASE_DIR,
     USER_DATA_DIR as _USER_DATA_ROOT,
     ensure_user_data_dir,
+    managed_file_path,
+    resolve_output_path,
+    write_private_json,
 )
 
 # ===== 路径常量 =====
@@ -46,16 +49,18 @@ os.makedirs(DATA_DIR, exist_ok=True)
 
 # ===== 知识库目录解析 =====
 # 支持通过 config.json 的 knowledge_base_dir / knowledge.base_dir 自定义知识库目录，
-# 未配置时回退到默认的 BASE_DIR/KnowledgeBase。
+# 相对目录基于当前用户数据根，插件模式不得指向根外。
 def resolve_knowledge_base_dir(cfg=None):
-    """从配置解析知识库目录；未配置回退默认 KnowledgeBase。"""
+    """从配置解析知识库目录；未配置回退当前数据根的 KnowledgeBase。"""
     if cfg is None:
         cfg = config
-    if cfg and isinstance(cfg, dict):
-        kb = cfg.get("knowledge_base_dir") or cfg.get("knowledge", {}).get("base_dir")
-        if kb:
-            return os.path.join(BASE_DIR, kb) if not os.path.isabs(kb) else kb
-    return KNOWLEDGE_BASE_DIR
+    kb = None
+    if isinstance(cfg, dict):
+        knowledge = cfg.get("knowledge")
+        kb = cfg.get("knowledge_base_dir") or (
+            knowledge.get("base_dir") if isinstance(knowledge, dict) else None
+        )
+    return str(resolve_output_path(kb, default=_USER_KNOWLEDGE_BASE_DIR))
 
 # ===== 敏感词加密 =====
 CIPHER_KEY_FILE = os.path.join(USER_DATA_DIR, ".cipher_key")
@@ -65,16 +70,17 @@ def _get_or_create_cipher_key():
     env_key = os.getenv("BILI_CIPHER_KEY")
     if env_key:
         return env_key.encode()
-    if os.path.exists(CIPHER_KEY_FILE):
-        with open(CIPHER_KEY_FILE, "r") as f:
-            return f.read().strip().encode()
+    path = managed_file_path(CIPHER_KEY_FILE)
+    if path.exists():
+        return path.read_text(encoding="utf-8").strip().encode()
     key = secrets.token_hex(32).encode()
+    flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0)
     try:
-        with open(CIPHER_KEY_FILE, "w") as f:
-            f.write(key.decode())
-        os.chmod(CIPHER_KEY_FILE, 0o600)
-    except OSError:
-        pass
+        fd = os.open(path, flags, 0o600)
+    except FileExistsError:
+        return managed_file_path(path).read_text(encoding="utf-8").strip().encode()
+    with os.fdopen(fd, "w", encoding="utf-8") as stream:
+        stream.write(key.decode())
     return key
 
 def _cipher_encrypt(plaintext: str, key: bytes = None) -> str:
@@ -558,9 +564,10 @@ def normalize_config(cfg):
 # ===== 配置加载/保存 =====
 def load_config():
     """加载配置文件，合并默认值，解密敏感词"""
-    if os.path.exists(CONFIG_FILE):
+    path = managed_file_path(CONFIG_FILE)
+    if path.exists():
         try:
-            with open(CONFIG_FILE, 'r', encoding='utf-8') as f:
+            with path.open('r', encoding='utf-8') as f:
                 cfg = json.load(f)
             cfg = normalize_config(cfg)
             # 清洗脱敏占位符：'[已隐藏]' 视为未配置（避免被当真实 key 使用）
@@ -594,25 +601,23 @@ def load_config():
 def save_config(cfg):
     """保存配置文件，加密敏感词（原子写入防崩溃损坏）"""
     try:
+        resolved_kb = resolve_knowledge_base_dir(cfg)
         cfg = normalize_config(cfg)
         # 加密 blocked_keywords 再存盘
         kw_list = cfg.get("reply_safety", {}).get("blocked_keywords", [])
         if kw_list and not all(k.startswith(("enc:", "===")) or len(k) < 3 for k in kw_list):
             cfg["reply_safety"]["blocked_keywords"] = [_cipher_encrypt(k) for k in kw_list]
-        tmp = CONFIG_FILE + '.tmp'
-        with open(tmp, 'w', encoding='utf-8') as f:
-            json.dump(cfg, f, ensure_ascii=False, indent=4)
-        os.replace(tmp, CONFIG_FILE)
+        write_private_json(CONFIG_FILE, cfg, indent=4)
         # 存完后解密回内存，保持内存中明文
         if kw_list:
             cfg["reply_safety"]["blocked_keywords"] = kw_list
         # 知识库目录可能随配置变化，重新解析（供 core.config 动态访问者使用）
         global KNOWLEDGE_BASE_DIR
-        KNOWLEDGE_BASE_DIR = resolve_knowledge_base_dir(cfg)
+        KNOWLEDGE_BASE_DIR = resolved_kb
         os.makedirs(KNOWLEDGE_BASE_DIR, exist_ok=True)
         return True
     except Exception as e:
-        print(f"{Fore.RED}[ERROR] 保存配置文件失败: {e}{Style.RESET_ALL}")
+        log_exception("保存配置文件失败", e)
         return False
 
 
@@ -630,25 +635,23 @@ def get_config_or_env(section, key, env_name):
 
 # ===== JSON 辅助 =====
 def load_json_file(path, default):
-    if os.path.exists(path):
-        try:
-            with open(path, "r", encoding="utf-8") as f:
+    try:
+        path = managed_file_path(path)
+        if path.exists():
+            with path.open("r", encoding="utf-8") as f:
                 return json.load(f)
-        except Exception as e:
-            print(f"[WARN] 加载 JSON 文件失败: {path} - {e}", flush=True)
+    except Exception as e:
+        log_exception("加载 JSON 文件失败", e)
     return default.copy() if isinstance(default, dict) else default
 
 
 def save_json_file(path, data):
     """原子写入 JSON 文件（tmp+replace 防止断电损坏）"""
     try:
-        tmp = path + '.tmp'
-        with open(tmp, 'w', encoding='utf-8') as f:
-            json.dump(data, f, ensure_ascii=False, indent=2)
-        os.replace(tmp, path)
+        write_private_json(path, data)
         return True
     except Exception as e:
-        print(f"[WARN] 保存 JSON 文件失败: {path} - {e}", flush=True)
+        log_exception("保存 JSON 文件失败", e)
         return False
 
 
@@ -790,34 +793,3 @@ def __getattr__(name):
                 return default
         return d if d is not None else default
     raise AttributeError(f"module '{__name__}' has no attribute '{name}'")
-
-
-
-# ===== 日志系统（供所有模块共用） =====
-def log(msg, level="INFO"):
-    """彩色日志输出"""
-    colors = {
-        "INFO": Fore.WHITE,
-        "SUCCESS": Fore.GREEN,
-        "WARN": Fore.YELLOW,
-        "ERROR": Fore.RED,
-        "DEBUG": Fore.CYAN,
-        "CONFIG": Fore.CYAN,
-        "BRAIN": Fore.MAGENTA,
-        "BILI": Fore.BLUE,
-        "COMMENT": Fore.GREEN,
-        "PRIVATE": Fore.MAGENTA,
-        "DANMAKU": Fore.CYAN,
-        "EYE": Fore.YELLOW,
-        "ASR": Fore.RED,
-        "MEMORY": Fore.BLUE,
-        "DIARY": Fore.GREEN,
-        "EVOLVE": Fore.MAGENTA,
-        "ENERGY": Fore.CYAN,
-        "SAFETY": Fore.YELLOW,
-        "PSYCHO": Fore.MAGENTA,
-    }
-    from datetime import datetime
-    timestamp = datetime.now().strftime("%H:%M:%S")
-    color = colors.get(level, Fore.WHITE)
-    print(f"{color}[{timestamp}][{level}] {msg}{Style.RESET_ALL}")

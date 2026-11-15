@@ -4,7 +4,6 @@ from __future__ import annotations
 import asyncio
 import json
 import re
-import sys
 from pathlib import Path
 from typing import Any
 
@@ -17,9 +16,8 @@ except Exception:  # 非 CLI 场景（如网页端导入）降级为无色
     Fore = Style = _N()
 
 
-BASE_DIR = Path(__file__).resolve().parent.parent
 from ..core.config import CONFIG_FILE
-from ..core.user_data import WORD_DIR
+from ..core.user_data import WORD_DIR, resolve_output_path
 
 
 
@@ -37,15 +35,9 @@ def _read_doc_cfg() -> dict:
 def _resolve_out_dir(out_dir=None) -> Path:
     """解析 Word/PDF 导出目录：优先参数，其次配置中的 document_export.output_dir/folder_name，回退默认。"""
     if out_dir:
-        p = Path(out_dir)
-        return p if p.is_absolute() else (WORD_DIR if getattr(sys, "frozen", False) else BASE_DIR / p)
-
+        return resolve_output_path(out_dir)
     cfg = _read_doc_cfg()
-    d = cfg.get("output_dir") or cfg.get("folder_name")
-    if not d:
-        return WORD_DIR
-    p = Path(d)
-    return p if p.is_absolute() else (WORD_DIR if getattr(sys, "frozen", False) else BASE_DIR / p)
+    return resolve_output_path(cfg.get("output_dir") or cfg.get("folder_name"), default=WORD_DIR)
 
 
 def _doc_prompt() -> str:
@@ -72,7 +64,7 @@ def _md_to_plain_lines(text: str) -> list[str]:
 
 def _read_md(md_path: str | Path, kb_root: str | Path | None = None) -> Path:
     from ..core.config import config, resolve_knowledge_base_dir
-    root = Path(kb_root or resolve_knowledge_base_dir(config)).resolve()
+    root = resolve_output_path(kb_root or resolve_knowledge_base_dir(config))
 
     target = Path(md_path)
     if not target.is_absolute():
@@ -111,7 +103,7 @@ def export_docx(md_path: str | Path, kb_root: str | Path | None = None, out_dir:
         r = ppre.add_run(prompt)
         r.italic = True
         doc.add_paragraph("")
-    out = output_dir / f"{_safe_name(target)}.docx"
+    out = resolve_output_path(output_dir / f"{_safe_name(target)}.docx")
     doc.save(str(out))
     return str(out)
 
@@ -128,7 +120,7 @@ def export_pdf(md_path: str | Path, kb_root: str | Path | None = None, out_dir: 
 
     output_dir = _resolve_out_dir(out_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
-    out = output_dir / f"{_safe_name(target)}.pdf"
+    out = resolve_output_path(output_dir / f"{_safe_name(target)}.pdf")
     c = canvas.Canvas(str(out), pagesize=A4)
     width, height = A4
     font_name = "Helvetica"
@@ -196,7 +188,7 @@ def export_docx_text(text: str, title: str, out_dir: str | Path | None = None) -
         r = ppre.add_run(prompt)
         r.italic = True
         doc.add_paragraph("")
-    out = output_dir / f"{_safe_title(title)}.docx"
+    out = resolve_output_path(output_dir / f"{_safe_title(title)}.docx")
     doc.save(str(out))
     return str(out)
 
@@ -211,7 +203,7 @@ def export_pdf_text(text: str, title: str, out_dir: str | Path | None = None) ->
         raise RuntimeError("缺少 reportlab，请先安装依赖：pip install reportlab") from exc
     output_dir = _resolve_out_dir(out_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
-    out = output_dir / f"{_safe_title(title)}.pdf"
+    out = resolve_output_path(output_dir / f"{_safe_title(title)}.pdf")
     c = canvas.Canvas(str(out), pagesize=A4)
     width, height = A4
     font_name = "Helvetica"
@@ -296,9 +288,11 @@ async def export_video_content(title: str, up_name: str, video_url: str, ctx: st
         try:
             import tempfile
             from .mindmap_export import export_mindmap
-            _safe = re.sub(r'[\\/:*?"<>|]', '_', title)[:80]
-            with tempfile.NamedTemporaryFile(mode='w', suffix='.md', prefix=f'[{bvid or "video"}] - ',
-                                             encoding='utf-8', delete=False) as _tf:
+            temp_dir = resolve_output_path("temp")
+            temp_dir.mkdir(parents=True, exist_ok=True)
+            prefix = _safe_title(bvid or "video")[:80]
+            with tempfile.NamedTemporaryFile(mode='w', suffix='.md', prefix=f'[{prefix}] - ',
+                                             dir=temp_dir, encoding='utf-8', delete=False) as _tf:
                 _tf.write(note)
                 _tmp_path = _tf.name
             try:

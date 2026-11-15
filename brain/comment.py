@@ -14,7 +14,7 @@ from ..core.config import (
 )
 from ..persona.managers import PersonaManager, MoodManager, UserProfileManager, PrivateContextDB
 from ..security.guard import ReplySafetyGuard
-from ..utils.display import log
+from ..utils.display import log, log_exception
 from datetime import datetime
 from ..utils.helpers import _mask_urls, parse_iso_datetime, ensure_ai_marker
 from ..api.throttle import _bili_throttle, _bili_trigger_cooldown
@@ -53,7 +53,7 @@ def _safe_platform_error(exc, limit=240):
         return "B站安全风控（HTTP 412），本轮跳过并将在后续轮询重试"
     if "<!doctype html" in lowered or "<html" in lowered:
         return "平台返回网页错误，响应内容已隐藏"
-    return compact[:limit]
+    return f"平台操作失败（{type(exc).__name__}）"
 
 
 def _is_bili_risk_control(exc) -> bool:
@@ -99,7 +99,7 @@ class CommentInteractionManager:
                 modular_settings = load_modular_settings()
                 self.video_understander = VideoUnderstanding(modular_settings, ModelClient(modular_settings, BotState()))
             except Exception as e:
-                log(f"视频理解模块初始化失败，将退回字幕模式: {e}", "WARN")
+                log_exception("视频理解模块初始化失败，将退回字幕模式", e)
 
         # 懒初始化向量检索引擎
         if KBSearchEngine and ModelClient and load_modular_settings and BotState:
@@ -107,7 +107,7 @@ class CommentInteractionManager:
                 modular_settings = load_modular_settings()
                 self.kb_search = KBSearchEngine(ModelClient(modular_settings, BotState()))
             except Exception as e:
-                log(f"向量检索引擎初始化失败: {e}", "WARN")
+                log_exception("向量检索引擎初始化失败", e)
     
     def _load_comment_log(self):
         """加载评论日志"""
@@ -124,7 +124,7 @@ class CommentInteractionManager:
                     data.setdefault("conversations", {})
                     return data
             except (json.JSONDecodeError, OSError) as e:
-                log(f"[WARN] 评论日志加载失败: {e}", "WARN")
+                log_exception("评论日志加载失败", e)
         return {
             "processed_comments": [], "replied_comments": [], "liked_comments": [],
             "history": [], "user_reply_state": {}, "reply_feed_baseline_initialized": False,
@@ -140,7 +140,7 @@ class CommentInteractionManager:
                 json.dump(self.comment_log, f, ensure_ascii=False, indent=2)
             os.replace(tmp, COMMENT_LOG_FILE)
         except OSError as e:
-            log(f'文件操作失败: {e}', 'DEBUG')
+            log_exception("保存评论日志失败", e)
     
     def _is_comment_processed(self, comment_id):
         """检查评论是否已处理"""
@@ -284,13 +284,12 @@ class CommentInteractionManager:
                 plan, comment_data.get("content", ""), comment_data.get("user_id")
             )
             log(
-                f"[Agent][评论] 工具完成 @{comment_data.get('user', '未知')}: "
-                f"{', '.join(results.keys()) or '无可用结果'}",
+                "[Agent][评论] 工具调用完成",
                 "BRAIN",
             )
             return plan, results
         except Exception as exc:
-            log(f"[Agent][评论] 工具调用失败 @{comment_data.get('user', '未知')}: {_safe_platform_error(exc)}", "WARN")
+            log_exception("[Agent][评论] 工具调用失败", exc)
             return plan, {"error": _safe_platform_error(exc)}
 
     @staticmethod
@@ -544,7 +543,7 @@ class CommentInteractionManager:
             return list(deduped.values())
             
         except Exception as e:
-            log(f"获取新评论失败: {_safe_platform_error(e)}", "ERROR")
+            log_exception("获取新评论失败", e)
             return []
     
     async def reply_to_comment(self, bili_client, comment_data, ai_response, *, is_at_mention=False):
@@ -578,7 +577,7 @@ class CommentInteractionManager:
             if COMMENT_MODE == "simulate":
                 self.log_interaction(comment_id, "reply_simulated", final_response, comment_data['user'])
                 self._mark_user_replied(comment_data.get("user_id"))
-                log(f"[模拟] 拟回复评论 @{comment_data['user']}: {final_response[:50]}...", "SIMULATE")
+                log("[模拟] 评论拟回复已生成", "SIMULATE")
                 return True
             
             # 真实模式：发送到B站
@@ -600,10 +599,11 @@ class CommentInteractionManager:
             
             self.log_interaction(comment_id, "reply", final_response, comment_data['user'])
             self._mark_user_replied(comment_data.get("user_id"))
-            log(f"已回复评论 @{comment_data['user']}: {final_response[:50]}...", "SUCCESS")
+            log("已回复评论", "SUCCESS")
             return True
             
         except Exception as e:
+            log_exception("评论回复发送失败", e)
             self.last_reply_failure = {
                 "terminal": _is_terminal_comment_error(e),
                 "reason": _safe_platform_error(e),
@@ -644,7 +644,7 @@ class CommentInteractionManager:
             return True
             
         except Exception as e:
-            log(f"点赞评论失败: {_safe_platform_error(e)}", "ERROR")
+            log_exception("点赞评论失败", e)
             return False
     
     async def process_new_comments(self, bili_client, max_replies=None, auto_reply=None):
@@ -691,7 +691,7 @@ class CommentInteractionManager:
                         context=self.comment_conversation_prompt(comment_data),
                     )
                     if social_result:
-                        log(f"[Agent] 评论社交工具结果 @{comment_data.get('user', '未知')}: {social_result.get('message', '无操作')}", "BRAIN")
+                        log("[Agent] 评论社交工具处理完成", "BRAIN")
 
                 # A reply to our comment is an ongoing conversation, not a
                 # random engagement candidate. Always let the AI consider it.
@@ -764,7 +764,7 @@ class CommentInteractionManager:
                     reply_content = ensure_ai_marker(reply_content)
                     if not should_auto_reply:
                         self.log_interaction(comment_data['id'], "reply_draft", reply_content, comment_data['user'])
-                        log(f"评论AI拟回复(未发送) @{comment_data['user']}: {reply_content[:80]}", "COMMENT")
+                        log("评论AI拟回复已生成(未发送)", "COMMENT")
                         self._mark_comment_processed(comment_data['id'])
                         processed += 1
                         continue
@@ -794,7 +794,7 @@ class CommentInteractionManager:
                 await asyncio.sleep(random.uniform(1, 3))
                 
             except Exception as e:
-                log(f"处理评论失败: {_safe_platform_error(e)}", "ERROR")
+                log_exception("处理评论失败", e)
                 self._mark_comment_processed(comment_data['id'])
         
         self.last_check_time = datetime.now()

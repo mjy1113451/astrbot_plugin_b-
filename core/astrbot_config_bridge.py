@@ -79,8 +79,9 @@ def apply_astrbot_config(values):
     patch = _filtered_patch(values, {name: schema[name] for name in sections})
 
     from . import config as shared
+    from .user_data import managed_file_path
 
-    path = Path(shared.CONFIG_FILE)
+    path = managed_file_path(shared.CONFIG_FILE)
     if path.exists():
         with path.open(encoding="utf-8") as stream:
             existing = json.load(stream)

@@ -9,11 +9,14 @@ INTERNAL_PACKAGES = {
     "api", "brain", "cli", "core", "knowledge", "ob_bridge", "persona",
     "security", "services", "utils", "xingye_bot",
 }
+INTERNAL_MODULES = {"_runtime"}
 
 
 class ImportContractTests(unittest.TestCase):
     def sources(self):
         yield ROOT / "main.py"
+        for name in sorted(INTERNAL_MODULES):
+            yield ROOT / f"{name}.py"
         for name in sorted(INTERNAL_PACKAGES):
             yield from sorted((ROOT / name).rglob("*.py"))
 
@@ -23,10 +26,10 @@ class ImportContractTests(unittest.TestCase):
                 tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
                 for node in ast.walk(tree):
                     if isinstance(node, ast.ImportFrom) and not node.level and node.module:
-                        self.assertNotIn(node.module.split(".")[0], INTERNAL_PACKAGES)
+                        self.assertNotIn(node.module.split(".")[0], INTERNAL_PACKAGES | INTERNAL_MODULES)
                     elif isinstance(node, ast.Import):
                         for alias in node.names:
-                            self.assertNotIn(alias.name.split(".")[0], INTERNAL_PACKAGES)
+                            self.assertNotIn(alias.name.split(".")[0], INTERNAL_PACKAGES | INTERNAL_MODULES)
 
     def test_runtime_internal_import_targets_exist(self):
         for path in self.sources():
@@ -43,6 +46,18 @@ class ImportContractTests(unittest.TestCase):
                 target = ROOT.joinpath(*parts)
                 with self.subTest(file=str(path.relative_to(ROOT)), line=node.lineno):
                     self.assertTrue(target.is_dir() or target.with_suffix(".py").is_file(), str(target))
+                    if node.module is None:
+                        for alias in node.names:
+                            child = target / alias.name
+                            self.assertTrue(child.is_dir() or child.with_suffix(".py").is_file(), str(child))
+
+    def test_production_does_not_create_or_reconfigure_python_loggers(self):
+        for path in self.sources():
+            with self.subTest(file=str(path.relative_to(ROOT))):
+                tree = ast.parse(path.read_text(encoding="utf-8"))
+                for node in ast.walk(tree):
+                    if isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute):
+                        self.assertNotIn(node.func.attr, {"getLogger", "basicConfig", "setLevel"})
 
     def test_required_tools_are_included(self):
         for name in ("display", "helpers", "lock", "storage", "subtitles",

@@ -7,6 +7,8 @@ import re
 from datetime import datetime
 
 from ._mixin_imports import *
+from .. import _runtime
+from ..utils.display import log_exception
 from ..api.subtitles import SYSTEM_PROMPT_COMMENT_SUMMARY
 from .local_note import build_local_subtitle_note
 
@@ -49,7 +51,7 @@ class BrainLearnMixin:
                 )
             except Exception as classify_error:
                 category_path = "未分类"
-                log(f"智能分类不可用，15秒内降级到未分类: {classify_error}", "WARN")
+                log_exception("智能分类不可用，15秒内降级到未分类", classify_error)
             log(f"智能分类结果: '{category_path}'", "KB")
             
             category_folder = self.classifier.get_or_create_folder(category_path)
@@ -106,7 +108,7 @@ class BrainLearnMixin:
             except Exception as summary_error:
                 summary_heading = "## 本地降级归档（原始材料）"
                 summary_content = build_local_subtitle_note(subtitle_text, video_desc)
-                log(f"AI总结不可用，已改为保存原始字幕摘录: {summary_error}", "WARN")
+                log_exception("AI总结不可用，已改为保存原始字幕摘录", summary_error)
             
             desc_section = f"- **简介**: {video_desc}\n" if video_desc else ""
             file_header = (
@@ -136,7 +138,7 @@ class BrainLearnMixin:
                     if version_info:
                         log(f"笔记版本已记录: {version_info}", "KB")
                 except Exception as vh_e:
-                    log(f"笔记版本记录失败: {vh_e}", "WARN")
+                    log_exception("笔记版本记录失败", vh_e)
 
             with open(file_path, 'w', encoding='utf-8') as f:
                 f.write(full_content)
@@ -150,7 +152,7 @@ class BrainLearnMixin:
                         mindmap_path = export_mindmap(file_path, cfg=config)
                         log(f"思维导图已生成: {mindmap_path}", "SUCCESS")
                     except Exception as mm_e:
-                        log(f"思维导图生成失败: {mm_e}", "WARN")
+                        log_exception("思维导图生成失败", mm_e)
 
                 # 📄 Word 文档自动导出（独立 Word/ 文件夹，受 document_export.enabled 控制）
                 if DOC_EXPORT_ENABLED:
@@ -159,9 +161,10 @@ class BrainLearnMixin:
                         docx_path = export_docx(file_path, kb_root=KNOWLEDGE_BASE_DIR)
                         log(f"Word 文档已导出: {docx_path}", "SUCCESS")
                     except Exception as de_e:
-                        log(f"Word 文档导出失败: {de_e}", "WARN")
+                        log_exception("Word 文档导出失败", de_e)
             
-            self.classifier.show_category_structure()
+            if not _runtime.plugin_mode:
+                self.classifier.show_category_structure()
 
             # 📦 Highlights archive: save high-quality content to highlights/ folder
             if DRY_GOODS_ENABLED and score is not None and score >= DRY_GOODS_MIN_SCORE:
@@ -190,21 +193,19 @@ class BrainLearnMixin:
                             f.write(dry_content)
                         log(f"[GOLD] Highlights archived! Score {score}/10 -> {dry_file_path}", "SUCCESS")
                 except Exception as dry_e:
-                    log(f"Highlights archive failed: {dry_e}", "WARN")
+                    log_exception("Highlights archive failed", dry_e)
 
             # 🧠 更新向量索引
             if self.kb_search:
                 try:
                     await self.kb_search.update_entry(file_path)
                 except Exception as ve:
-                    log(f"向量索引更新失败: {ve}", "WARN")
+                    log_exception("向量索引更新失败", ve)
 
             return True
 
         except Exception as e:
-            log(f"学习与归档过程中发生错误: {e}", "ERROR")
-            import traceback
-            traceback.print_exc()
+            log_exception("学习与归档过程中发生错误", e)
             return False
 
     async def learn_from_comments(self, bvid, title, up, video_url, comment_text, c_list, topic_suggestion, score=None):
@@ -256,7 +257,8 @@ class BrainLearnMixin:
             return summary, ""
 
         except Exception as e:
-            return None, f"评论区知识收集出错: {e}"
+            log_exception("评论区知识收集出错", e)
+            return None, "评论区知识收集出错，请查看安全诊断日志。"
 
     async def verify_knowledge_file(self, bvid, video_title):
         """回顾复习时验证知识文件真实性。如果发现虚假/错误，备份原文件并重写。
@@ -325,5 +327,5 @@ class BrainLearnMixin:
                 return True, 0, f"验证通过（评分{overall_score:.0%}）"
                 
         except Exception as e:
-            log(f"知识验证过程出错: {e}", "WARN")
-            return True, 0, f"验证失败跳过: {e}"
+            log_exception("知识验证过程出错", e)
+            return True, 0, "验证失败跳过，请查看安全诊断日志。"

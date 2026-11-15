@@ -1,6 +1,55 @@
 """brain/_brain_ai.py — AgentBrain AI后端 & 多Provider mixin"""
+from contextlib import AsyncExitStack
+
 from ._mixin_imports import *
-from ..utils.helpers import _mask_urls
+
+
+def _safe_ai_error(error):
+    """Diagnostics must never include provider text or request credentials."""
+    if isinstance(error, _AIRequestError):
+        return str(error)
+    status = getattr(error, "status_code", None)
+    if status is None:
+        status = getattr(getattr(error, "response", None), "status_code", None)
+    name = type(error).__name__
+    return f"{name} (HTTP {status})" if isinstance(status, int) else name
+
+
+def _ai_retry_text(error):
+    """Provider text is only for classification, never for logs/messages."""
+    if isinstance(error, _AIRequestError):
+        return " ".join(error._retry_markers) + " " + str(error).lower()
+    text = str(error)
+    try:
+        text += " " + error.response.text
+    except (AttributeError, TypeError, RuntimeError):
+        pass
+    return (text + " " + _safe_ai_error(error)).lower()
+
+
+_RETRY_MARKERS = (
+    "http 402", "insufficient balance", "insufficient quota", "quota exceeded",
+    "model_not_found", "无可用渠道", "model is not found", "unsupported model",
+    "overload", "not ready", "too many", "rate limit", "429", "503", "502", "522", "timeout",
+    "http 400", "http 401", "http 403", "400 bad request", "401 unauthorized", "403 forbidden",
+    "context length", "maximum context", "content is too long", "content_filter", "content filter", "safety",
+    "plugin_error", "empty response after retry", "ai returned an empty response",
+    "all connection attempts failed", "connection refused", "actively refused",
+    "failed to establish a new connection",
+)
+
+
+class _AIRequestError(RuntimeError):
+    """Expose safe metadata while preserving the existing retry categories."""
+    def __init__(self, error):
+        super().__init__(_safe_ai_error(error))
+        status = getattr(error, "status_code", None)
+        if status is None:
+            status = getattr(getattr(error, "response", None), "status_code", None)
+        self.status_code = status if isinstance(status, int) else None
+        text = _ai_retry_text(error)
+        self._retry_markers = tuple(marker for marker in _RETRY_MARKERS if marker in text)
+
 
 class BrainAIMixin:
     """AI backend methods"""
@@ -83,13 +132,20 @@ class BrainAIMixin:
             _proxy_url = get_proxy_url()
         except Exception:
             pass
-        _http_client = httpx.Client(proxy=_proxy_url) if _proxy_url else None
-
-        client = OpenAI(api_key=api_key, base_url=base_url, timeout=float(timeout_val),
-                        max_retries=0, http_client=_http_client)
         kwargs.pop("_vision_api_key", None)
         kwargs.pop("_vision_base_url", None)
-        return client.chat.completions.create(**kwargs)
+        try:
+            async with AsyncExitStack() as stack:
+                _http_client = None
+                if _proxy_url:
+                    _http_client = await stack.enter_async_context(httpx.AsyncClient(proxy=_proxy_url))
+                client = await stack.enter_async_context(AsyncOpenAI(
+                    api_key=api_key, base_url=base_url, timeout=float(timeout_val),
+                    max_retries=0, http_client=_http_client,
+                ))
+                return await client.chat.completions.create(**kwargs)
+        except Exception as exc:
+            raise _AIRequestError(exc) from None
 
     async def _call_ai_via_httpx(self, **kwargs):
         """通过 httpx 直接 POST 到 OpenAI 兼容端点（备选方案）。
@@ -100,7 +156,7 @@ class BrainAIMixin:
         live = self._live_config()
         model = kwargs.get("model", live["model_brain"])
         messages = kwargs.get("messages", [])
-        timeout = kwargs.get("request_timeout", 120)
+        timeout = kwargs.get("request_timeout", kwargs.get("timeout", 120))
         extra_body = {}
         if "max_tokens" in kwargs:
             extra_body["max_tokens"] = kwargs["max_tokens"]
@@ -117,7 +173,7 @@ class BrainAIMixin:
                 base_url = live["base_url"]
             else:
                 raise RuntimeError(
-                    f"API地址无效: '{base_url}'，请在配置菜单中设置有效的API地址（如 http://127.0.0.1:18767/v1）"
+                    "API地址无效，请在配置菜单中设置有效的API地址"
                 )
 
         url = f"{base_url.rstrip('/')}/chat/completions"
@@ -147,14 +203,8 @@ class BrainAIMixin:
             try:
                 resp.raise_for_status()
             except httpx.HTTPStatusError as he:
-                # [DEBUG] 附带API返回的具体错误信息，方便排查
-                try:
-                    body_preview = resp.text[:500] if resp.text else "(empty body)"
-                except Exception:
-                    body_preview = "(read failed)"
                 raise httpx.HTTPStatusError(
-                    f"HTTP {resp.status_code}: {body_preview}",
-                    request=he.request, response=he.response
+                    f"HTTP {resp.status_code}", request=he.request, response=he.response,
                 ) from None
             data = resp.json()
 
@@ -188,7 +238,7 @@ class BrainAIMixin:
 
         def is_balance_exhausted(error: Exception) -> bool:
             """A 402 balance response cannot recover through retries."""
-            text = str(error).lower()
+            text = _ai_retry_text(error)
             return (
                 "http 402" in text
                 or "insufficient balance" in text
@@ -305,7 +355,8 @@ class BrainAIMixin:
                         except Exception as e:
                             if is_last_backend:
                                 last_error = e
-                                err_msg = str(e).lower()
+                                err_msg = _ai_retry_text(e)
+                                error_label = _safe_ai_error(e)
                                 if is_balance_exhausted(e):
                                     # The provider has explicitly rejected the request for lack of
                                     # balance. Retrying the same key only blocks the learning loop
@@ -319,14 +370,14 @@ class BrainAIMixin:
                                         "请在配置编辑中检查当前 API 提供商的余额或更换可用密钥。",
                                         "WARN",
                                     )
-                                    raise RuntimeError("AI账户余额或配额不足（HTTP 402）") from e
+                                    raise RuntimeError("AI账户余额或配额不足（HTTP 402）") from None
                                 is_model_gone = any(kw in err_msg for kw in
                                     ['model_not_found', '无可用渠道', 'model is not found', 'unsupported model'])
                                 is_overload = any(kw in err_msg for kw in 
                                     ['overload', 'not ready', 'too many', 'rate limit', '429', '503', '502', '522', 'timeout'])
                                 # 客户端错误 (400/401/403): 请求本身有问题，重试无效
                                 is_client_error = any(kw in err_msg for kw in
-                                    ['http 400', '400 bad request', '401 unauthorized', '403 forbidden',
+                                    ['http 400', 'http 401', 'http 403', '400 bad request', '401 unauthorized', '403 forbidden',
                                      'context length', 'maximum context', 'content is too long',
                                      'content_filter', 'content filter', 'safety'])
                                 is_empty_plugin_response = (
@@ -341,13 +392,11 @@ class BrainAIMixin:
                                     'failed to establish a new connection',
                                 ))
                                 if is_model_gone:
-                                    log(f"[SKIP] 模型不可用({err_msg[:120]})，跳过重试直接切换", "WARN")
+                                    log(f"[SKIP] 模型不可用({error_label})，跳过重试直接切换", "WARN")
                                     _skip_model_retries = True
                                     break
                                 if is_client_error:
-                                    # 打印API原始错误便于排查
-                                    err_detail = str(e)[:300].replace('\n', ' | ')
-                                    log(f"[FAIL] API拒绝请求(客户端错误): {_mask_urls(err_detail)}", "WARN")
+                                    log(f"[FAIL] API拒绝请求(客户端错误): {error_label}", "WARN")
                                     # 客户端错误不重试，但允许切换后端/模型/提供商
                                     _skip_model_retries = True
                                     break
@@ -357,7 +406,7 @@ class BrainAIMixin:
                                     break
                                 if attempt < _cur_retries - 1:
                                     wait = (attempt + 1) * 3.0
-                                    short_err = _mask_urls(str(e)[:120]) or type(e).__name__
+                                    short_err = error_label
                                     if is_overload:
                                         log(f"⏳ AI服务器繁忙{short_err}，第{attempt+1}次重试，等待{wait:.0f}秒...", "WARN")
                                     else:
@@ -408,7 +457,9 @@ class BrainAIMixin:
                 self._ai_fallback_recheck_at = time.time() + 600
                 log(f"🔻 主API连续失败{self._ai_primary_failing}次，将在下次调用切换到备用提供商", "WARN")
         
-        raise last_error or RuntimeError("AI调用全部失败，原因未知")
+        if last_error is not None:
+            raise _AIRequestError(last_error) from None
+        raise RuntimeError("AI调用全部失败，原因未知")
 
     async def _psycho_ai_caller(self, **kwargs):
         """心理画像引擎的AI调用桥接，复用主Agent的多级降级/provider切换"""

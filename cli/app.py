@@ -18,8 +18,21 @@ import httpx
 import uuid
 from datetime import datetime, timedelta
 from io import BytesIO
+from functools import wraps
 import colorama
 from colorama import Fore, Style
+from .. import _runtime
+
+
+def _initialize_cli_terminal():
+    """只有独立 CLI 才能配置宿主进程的终端。"""
+    if _runtime.plugin_mode:
+        return
+    if hasattr(sys.stdout, "reconfigure"):
+        sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+    if hasattr(sys.stderr, "reconfigure"):
+        sys.stderr.reconfigure(encoding="utf-8", errors="replace")
+    colorama.init(autoreset=True)
 
 
 def _plugin_version() -> str:
@@ -46,7 +59,29 @@ from ..services.knowledge_tutor import KnowledgeTutor, scan_md_files, read_md_fi
 # ===== 工具函数导入（从 utils/ 模块） =====
 from ..utils.helpers import _mask_urls, sanitize_filename, ensure_ai_marker, unix_to_iso, parse_iso_datetime, human_reply_delay, _clean_ai_output
 from ..utils.lock import _acquire_bot_lock, _release_bot_lock
-from ..utils.display import log, mask_secret
+from ..utils.display import log, log_exception, mask_secret
+
+
+def _cli_only(operation):
+    """拒绝宿主里的终端菜单/确认；不能把缺失交互解释为默认同意。"""
+    def check_mode():
+        if _runtime.plugin_mode:
+            message = f"插件模式不支持交互操作 {operation.__name__}，请使用显式参数的非交互接口"
+            log(message, "WARN")
+            raise RuntimeError(message)
+
+    if asyncio.iscoroutinefunction(operation):
+        @wraps(operation)
+        async def async_operation(*args, **kwargs):
+            check_mode()
+            return await operation(*args, **kwargs)
+        return async_operation
+
+    @wraps(operation)
+    def sync_operation(*args, **kwargs):
+        check_mode()
+        return operation(*args, **kwargs)
+    return sync_operation
 
 # ===== B站 API 层导入（从 bili/ 模块） =====
 from ..api.throttle import _bili_throttle, _bili_trigger_cooldown, _BILI_API_MIN_GAP
@@ -72,8 +107,9 @@ from ..knowledge.custom import (
 from ..brain.comment import CommentInteractionManager
 from ..brain.private_msg import PrivateMessageManager
 from ..brain.agent_brain import AgentBrain
-from ..brain.video_analysis import manual_video_analysis, up_homepage_learn
+from ..brain.video_analysis import manual_video_analysis, up_homepage_learn, _load_profile_cookies
 
+@_cli_only
 def _disclaimer_confirm():
     """显示红色免责声明，输入'我同意'后继续。"""
     import os as _os
@@ -112,6 +148,10 @@ from ..core.user_data import (
     QR_CODES_DIR as _SHARED_QR_CODES_DIR,
     USER_DATA_DIR as _SHARED_USER_DATA_DIR,
     WORD_DIR as _SHARED_WORD_DIR,
+    TEMP_DIR,
+    CACHE_DIR,
+    managed_file_path,
+    resolve_output_path,
 )
 from ..core.config import resolve_knowledge_base_dir
 from ..core.factory_reset import DEFAULT_RESET_GROUP_IDS, RESET_GROUPS, erase_all_user_data, preview_reset_targets
@@ -120,10 +160,7 @@ from ..persona.psycho import (
     get_mode_emoji, get_mode_label,
 )
 
-if hasattr(sys.stdout, "reconfigure"):
-    sys.stdout.reconfigure(encoding="utf-8", errors="replace")  # type: ignore[attr-defined]
-if hasattr(sys.stderr, "reconfigure"):
-    sys.stderr.reconfigure(encoding="utf-8", errors="replace")  # type: ignore[attr-defined]
+_initialize_cli_terminal()
 
 try:
     from ..xingye_bot.llm import ModelClient
@@ -138,9 +175,6 @@ except ImportError:
     VideoUnderstanding = None
     normalize_mode = None
     KBSearchEngine = None
-
-# --- 初始化彩色日志 ---
-colorama.init(autoreset=True)
 
 # --- 导入 bilibili_api 相关模块 ---
 try:
@@ -634,7 +668,7 @@ VIDEO_UNDERSTANDING_MODE = config.get("video", {}).get("mode", "smart")
 VIDEO_MAX_DURATION_SECONDS = config.get("video", {}).get("max_duration_seconds", 900)
 VIDEO_FRAME_COUNT = config.get("video", {}).get("frame_count", 12)
 VIDEO_DOWNLOAD_INTEREST_THRESHOLD = config.get("video", {}).get("download_interest_threshold", 7.0)
-VIDEO_DOWNLOAD_DIR = config.get("video", {}).get("download_dir", "")
+VIDEO_DOWNLOAD_DIR = str(resolve_output_path(config.get("video", {}).get("download_dir"), default=CACHE_DIR / "videos"))
 VIDEO_DELETE_AFTER_UNDERSTAND = config.get("video", {}).get("delete_video_after_understand", True)
 VIDEO_FILTER_MODE = config.get("video", {}).get("filter_mode", "cover_and_title")  # watch_all / cover_and_title
 VIDEO_QUALITY = config.get("video", {}).get("quality", "best")  # 下载画质: best/1080p/720p/480p/360p
@@ -854,6 +888,7 @@ from ..core.config import CIPHER_KEY_FILE
 # [brain/comment.py] CommentInteractionManager
 # [brain/private_msg.py] PrivateMessageManager
 
+@_cli_only
 def show_quick_toggles_menu():
     """快捷开关面板 — 集中管理所有开关"""
     global NO_HUMAN_DELAY, QUIET_MODE, ASR_ENABLED, VISION_COVER_ENABLED, REPLY_SAFETY_ENABLED
@@ -960,6 +995,7 @@ def _parse_shared_setting_value(raw, current):
     return text
 
 
+@_cli_only
 def show_shared_settings_menu():
     """Edit every shared config field from the CLI without duplicating Web UI settings."""
     global config
@@ -1024,6 +1060,7 @@ def show_shared_settings_menu():
                 print(f"{Fore.RED}[ERROR] 保存失败，未应用修改{Style.RESET_ALL}")
 
 
+@_cli_only
 def show_main_menu():
     """显示主菜单"""
     global COMMENT_MODE
@@ -1122,6 +1159,7 @@ def show_main_menu():
     print(f"    {Fore.LIGHTMAGENTA_EX}AR.{Style.RESET_ALL} AI behavior review settings (including desktop notifications)")
 
 
+@_cli_only
 def open_web_panel():
     """打开网页端：若未运行则后台启动 web_panel.py，再打开浏览器。"""
     import subprocess
@@ -1203,6 +1241,7 @@ def open_web_panel():
     except Exception as e:
         print(f"{Fore.YELLOW}[WARN] 无法自动打开浏览器，请手动访问 {url} ({e}){Style.RESET_ALL}")
 
+@_cli_only
 def show_mood_menu():
     """AI心情管理菜单 - 随机心情 / 自定义心情"""
     global config, MOOD_RANDOM_ENABLED, MOOD_RANDOM_INTERVAL_MINUTES
@@ -1294,11 +1333,12 @@ def show_mood_menu():
         if choice in ("1","2","3","4","5"):
             save_config(config)
 
+@_cli_only
 async def _mindmap_from_video_input(cfg):
     """🧠 思维导图：输入视频(链接/BV/标题/UP主) → 抓取字幕 → 生成思维导图。
     复用手动视频分析的解析与字幕获取逻辑，而非只从已有知识库导出。"""
     try:
-        from ..brain.video_analysis import AgentBrain, _extract_bvid, _resolve_b23_short
+        from ..brain.video_analysis import AgentBrain, _extract_bvid_async
         from ..api.subtitles import fetch_bilibili_subtitles
         from ..core.config import COOKIE_FILE
         from ..services.mindmap_export import export_mindmap
@@ -1321,13 +1361,7 @@ async def _mindmap_from_video_input(cfg):
     bvid = None
     title = None
     up_name = None
-    raw_bvid = _extract_bvid(user_input)
-    if raw_bvid:
-        if 'b23.tv' in user_input.lower():
-            resolved = await _resolve_b23_short(raw_bvid)
-            bvid = resolved or raw_bvid
-        else:
-            bvid = raw_bvid
+    bvid = await _extract_bvid_async(user_input)
 
     # ── 第二步：标题/UP 搜索 ──
     if not bvid:
@@ -1380,33 +1414,9 @@ async def _mindmap_from_video_input(cfg):
     title = title or bvid
 
     # ── 加载 Cookie（用于获取AI字幕）──
-    cookies = None
-    if os.path.exists(COOKIE_FILE):
-        try:
-            with open(COOKIE_FILE, 'r', encoding='utf-8') as f:
-                cookies = json.load(f)
-            print(f"{Fore.GREEN}[LOGIN] 已加载本地登录Cookie (UID: {cookies.get('DedeUserID','?')}){Style.RESET_ALL}")
-        except Exception:
-            cookies = None
-    else:
-        sibling_dirs = [
-            ("bilibili_learning_bot", "Data/bilibili_cookies.json"),
-            ("bilibili_learning_bot-2.2.1", "Data/bilibili_cookies.json"),
-            ("bilibili_learning_bot-3.0.1", "Data/bilibili_cookies.json"),
-            ("bilibili_learning_bot-2.2.2/bilibili_learning_bot-3.0.0", "Data/bilibili_cookies.json"),
-            ("bilibili_claw", "Data/bilibili_cookies.json"),
-            ("batch_unfollow", "Data/bilibili_cookies.json"),
-        ]
-        for sib_dir, sib_file in sibling_dirs:
-            sibling_cookie = os.path.join(os.path.dirname(BASE_DIR), sib_dir, sib_file)
-            if os.path.exists(sibling_cookie):
-                try:
-                    with open(sibling_cookie, 'r', encoding='utf-8') as f:
-                        cookies = json.load(f)
-                    print(f"{Fore.GREEN}[LOGIN] 已从 {sib_dir} 加载Cookie{Style.RESET_ALL}")
-                    break
-                except Exception:
-                    pass
+    cookies = _load_profile_cookies()
+    if cookies:
+        log("已加载当前配置的登录 Cookie", "LOGIN")
 
     # ── 抓取字幕 + 简介 ──
     print(f"{Fore.CYAN}获取视频信息 + 字幕...{Style.RESET_ALL}")
@@ -1436,7 +1446,9 @@ async def _mindmap_from_video_input(cfg):
 
     # ── 写入临时 md 并导出思维导图 ──
 
-    fd, tmp = tempfile.mkstemp(suffix='.md', prefix='mm_video_')
+    temp_dir = resolve_output_path(TEMP_DIR)
+    temp_dir.mkdir(parents=True, exist_ok=True)
+    fd, tmp = tempfile.mkstemp(suffix='.md', prefix='mm_video_', dir=temp_dir)
     try:
         with os.fdopen(fd, 'w', encoding='utf-8') as f:
             f.write(md)
@@ -1501,6 +1513,7 @@ async def _ai_summarize_subs_to_outline(title, up_name, desc, subs, cfg):
 
 
 
+@_cli_only
 def show_mindmap_menu():
     """🧠 思维导图：把已学知识（单个视频 / 整个知识库）或输入视频导出为可交互 HTML 思维导图。"""
     try:
@@ -1585,6 +1598,7 @@ def show_mindmap_menu():
             print(f"{Fore.YELLOW}[INFO] 无效选项{Style.RESET_ALL}")
 
 
+@_cli_only
 def show_config_menu():
     """显示配置菜单"""
     global UNIFIED_API_KEY, UNIFIED_BASE_URL, MODEL_BRAIN, MODEL_VISION, MODEL_HTML, openai
@@ -1783,6 +1797,7 @@ def _fetch_available_models():
     except Exception as e:
         print(f"{Fore.RED}[ERROR] 获取模型列表异常: {e}{Style.RESET_ALL}")
 
+@_cli_only
 def configure_fallback_provider():
     """配置备用API提供商（跨服务降级，含思考模型和图片模型）。"""
     global FALLBACK_PROVIDER_ENABLED, FALLBACK_PROVIDER_NAME, FALLBACK_PROVIDER_API_KEY
@@ -1869,6 +1884,7 @@ def configure_fallback_provider():
         else:
             print(f"{Fore.RED}[ERROR] 无效选项{Style.RESET_ALL}")
 
+@_cli_only
 def configure_ob_settings():
     """配置 OpenBiliClaw 推荐引擎集成"""
     ob_cfg = config.setdefault("ob", {})
@@ -1987,6 +2003,7 @@ def configure_ob_settings():
         else:
             print(f"{Fore.RED}[ERROR] 无效选项{Style.RESET_ALL}")
 
+@_cli_only
 def configure_api_key():
     global UNIFIED_API_KEY, openai
     print(f"\n{Fore.CYAN}当前API密钥: {mask_secret(UNIFIED_API_KEY)}{Style.RESET_ALL}")
@@ -1998,6 +2015,7 @@ def configure_api_key():
         save_config(config)
         print(f"{Fore.GREEN}[OK] API密钥已更新并自动保存！{Style.RESET_ALL}")
 
+@_cli_only
 def configure_api_url():
     global UNIFIED_BASE_URL, openai
     print(f"\n{Fore.CYAN}当前API地址: {UNIFIED_BASE_URL}{Style.RESET_ALL}")
@@ -2017,6 +2035,7 @@ def configure_api_url():
         save_config(config)
         print(f"{Fore.GREEN}[OK] API地址已更新并自动保存！{Style.RESET_ALL}")
 
+@_cli_only
 def configure_brain_model():
     global MODEL_BRAIN
     print(f"\n{Fore.CYAN}当前思考模型: {MODEL_BRAIN}{Style.RESET_ALL}")
@@ -2028,6 +2047,7 @@ def configure_brain_model():
         save_config(config)
         print(f"{Fore.GREEN}[OK] 思考模型已更新并自动保存！{Style.RESET_ALL}")
 
+@_cli_only
 def configure_vision_model():
     global MODEL_VISION
     print(f"\n{Fore.CYAN}当前视觉模型: {MODEL_VISION}{Style.RESET_ALL}")
@@ -2039,6 +2059,7 @@ def configure_vision_model():
         save_config(config)
         print(f"{Fore.GREEN}[OK] 视觉模型已更新并自动保存！{Style.RESET_ALL}")
 
+@_cli_only
 def configure_html_model():
     """配置生成 HTML 的 AI 模型（默认使用思考模型）"""
     global MODEL_HTML, MODEL_BRAIN
@@ -2057,6 +2078,7 @@ def configure_html_model():
     save_config(config)
     print(f"{Fore.GREEN}[OK] HTML生成模型已更新并自动保存！{'当前: ' + (MODEL_HTML or MODEL_BRAIN)}{Style.RESET_ALL}")
 
+@_cli_only
 def configure_provider_preset():
     """选择内置厂商预设，自动填入官方 OpenAI 兼容的 Base URL 与默认模型。"""
     from ..core.config import PROVIDER_PRESETS
@@ -2110,6 +2132,7 @@ def configure_provider_preset():
     print(f"  HTML模型 : {config['api']['model_html']}")
     print(f"{Fore.YELLOW}[提示] 请确认已配置对应厂商的 API Key（选项 1）{Style.RESET_ALL}")
 
+@_cli_only
 def configure_vision_api_key():
     """设置视觉模型独立 API 密钥"""
     global VISION_API_KEY
@@ -2133,6 +2156,7 @@ def configure_vision_api_key():
         save_config(config)
         print(f"{Fore.GREEN}[OK] 已恢复使用统一API密钥{Style.RESET_ALL}")
 
+@_cli_only
 def configure_vision_api_url():
     """设置视觉模型独立 API 地址"""
     global VISION_BASE_URL
@@ -2155,6 +2179,7 @@ def configure_vision_api_url():
         save_config(config)
         print(f"{Fore.GREEN}[OK] 已恢复使用统一API地址{Style.RESET_ALL}")
 
+@_cli_only
 def clear_vision_independent_config():
     """一键清除视觉模型独立配置"""
     global VISION_API_KEY, VISION_BASE_URL
@@ -2173,6 +2198,7 @@ def clear_vision_independent_config():
         save_config(config)
         print(f"{Fore.GREEN}[OK] 已清除，视觉模型恢复使用统一API配置{Style.RESET_ALL}")
 
+@_cli_only
 def configure_video_settings():
     global VIDEO_UNDERSTANDING_MODE, VIDEO_MAX_DURATION_SECONDS, VIDEO_FRAME_COUNT
     global VIDEO_DOWNLOAD_INTEREST_THRESHOLD, VIDEO_DOWNLOAD_DIR
@@ -2323,9 +2349,10 @@ def configure_video_settings():
 
     new_path = input(f"{Fore.YELLOW}请输入新下载路径 (回车保持，留空继续用当前路径): {Style.RESET_ALL}").strip().strip('"')
     if new_path:
-        video_cfg["download_dir"] = new_path
-        VIDEO_DOWNLOAD_DIR = new_path
-        print(f"{Fore.GREEN}[OK] 视频下载路径已更新: {new_path}{Style.RESET_ALL}")
+        resolved_download = resolve_output_path(new_path, default=CACHE_DIR / "videos")
+        video_cfg["download_dir"] = str(resolved_download)
+        VIDEO_DOWNLOAD_DIR = str(resolved_download)
+        print(f"{Fore.GREEN}[OK] 视频下载路径已更新: {resolved_download}{Style.RESET_ALL}")
 
     cur_anchor = (config.get("video", {}) or {}).get("frame_note_mode", "visual_note")
     anchor_input = input(f"{Fore.YELLOW}图文笔记模式 (visual_note=图文+目录 / classic=经典仅理解, 当前: {cur_anchor}, 回车保持): {Style.RESET_ALL}").strip().lower()
@@ -2378,6 +2405,7 @@ def configure_video_settings():
         print(f"{Fore.RED}[ERROR] 视频设置保存失败{Style.RESET_ALL}")
 
 
+@_cli_only
 def _configure_video_interval_settings():
     """配置视频间隔（短暂休息的随机最小/最大秒数）"""
     global config, VIDEO_INTERVAL_MIN, VIDEO_INTERVAL_MAX
@@ -2469,6 +2497,7 @@ def _configure_video_interval_settings():
                 print(f"{Fore.GREEN}[OK] 视频间隔已更新为 {VIDEO_INTERVAL_MIN}-{VIDEO_INTERVAL_MAX} 秒{Style.RESET_ALL}")
 
 
+@_cli_only
 def _configure_asr_settings():
     """ASR语音识别子设置"""
     global ASR_ENABLED, ASR_BACKEND, ASR_WHISPER_MODEL, ASR_LANGUAGE, ASR_SPEAKER_SEPARATION
@@ -2628,6 +2657,7 @@ def _configure_asr_settings():
         ASR_SPEAKER_SEPARATION = not ASR_SPEAKER_SEPARATION
         asr_cfg["speaker_separation"] = ASR_SPEAKER_SEPARATION
 
+@_cli_only
 def _configure_dry_goods_settings():
     """Highlights archive settings: toggle + minimum score threshold"""
     global DRY_GOODS_ENABLED, DRY_GOODS_MIN_SCORE, DRY_GOODS_FOLDER_NAME
@@ -2681,6 +2711,7 @@ def _configure_dry_goods_settings():
         else:
             print(f"{Fore.RED}[ERROR] Invalid option{Style.RESET_ALL}")
 
+@_cli_only
 def configure_session_params():
     """配置会话限制和完成后的运行方式。"""
     global SESSION_MAX_VIDEOS, SESSION_MAX_LEARNED_VIDEOS
@@ -2745,6 +2776,7 @@ def configure_session_params():
     else:
         print(f"{Fore.RED}[ERROR] 会话限制设置保存失败{Style.RESET_ALL}")
 
+@_cli_only
 def configure_interaction_params():
     global PROB_COMMENT_OTHERS, COMMENT_CHECK_INTERVAL, PROB_REPLY_TRIGGER, PROB_COIN, PROB_FAV, PROB_LIKE_SOLO, COMMENT_CHECK_ENABLED, PRIVATE_MESSAGE_ENABLED, RANDOM_ENABLED
     
@@ -2840,6 +2872,7 @@ def configure_interaction_params():
     save_config(config)
 
 
+@_cli_only
 def show_coin_settings_menu():
     """投币限制设置 — 每日上限/投币阈值/概率/冷却时间"""
     global MAX_COINS_DAILY, COIN_THRESHOLD, PROB_COIN
@@ -2943,6 +2976,7 @@ def show_coin_settings_menu():
     _reload_all_globals(config)
 
 
+@_cli_only
 def show_learning_tools_menu():
     """学习工具子菜单 — 出题考试 + 深入了解（均支持一次性/Agent模式）"""
     while True:
@@ -2988,6 +3022,7 @@ def show_learning_tools_menu():
             print(f"{Fore.YELLOW}[INFO] 无效选项{Style.RESET_ALL}")
 
 
+@_cli_only
 def configure_energy_params():
     global MAX_ENERGY
     print(f"\n{Fore.CYAN}精力系统参数配置{Style.RESET_ALL}")
@@ -3004,6 +3039,7 @@ def configure_energy_params():
     # 自动保存
     save_config(config)
 
+@_cli_only
 def show_current_config():
     """显示当前配置"""
     print(f"\n{Fore.CYAN}════════════════════════════════════════════════════════════{Style.RESET_ALL}")
@@ -3064,6 +3100,7 @@ def show_current_config():
 
     print(f"\n{Fore.CYAN}════════════════════════════════════════════════════════════{Style.RESET_ALL}")
 
+@_cli_only
 def show_login_menu():
     """显示登录配置菜单"""
     while True:
@@ -3102,6 +3139,7 @@ def show_login_menu():
         else:
             print(f"{Fore.RED}[ERROR] 无效选项，请重新选择！{Style.RESET_ALL}")
 
+@_cli_only
 def show_interest_menu():
     """显示兴趣管理菜单"""
     interest_mgr = InterestManager()
@@ -3164,6 +3202,7 @@ def show_interest_menu():
 # ═══════════════════════════════════════════════════════════
 #  兴趣偏好设置菜单 (引擎 v2.0 — 整合方案A/B/C/D)
 # ═══════════════════════════════════════════════════════════
+@_cli_only
 def show_interest_prefs_menu():
     """🎯 兴趣偏好设置 — 智能引擎 v2.0 全功能菜单"""
     from ..services.interest_engine import get_engine, reset_engine
@@ -3428,6 +3467,7 @@ def show_interest_prefs_menu():
             print(f"{Fore.RED}[ERROR] 无效选项！{Style.RESET_ALL}")
 
 
+@_cli_only
 def show_comment_menu():
     """显示评论互动设置菜单"""
     global PROB_COMMENT_OTHERS, COMMENT_CHECK_INTERVAL, MAX_REPLIES_PER_CHECK, COMMENT_MODE, COMMENT_CHECK_ENABLED
@@ -3534,6 +3574,7 @@ def show_comment_menu():
         else:
             print(f"{Fore.RED}[ERROR] 无效选项！{Style.RESET_ALL}")
 
+@_cli_only
 def show_comment_log():
     """显示评论互动日志"""
     if not os.path.exists(COMMENT_LOG_FILE):
@@ -3575,6 +3616,7 @@ def show_comment_log():
         print(f"{Fore.RED}[ERROR] 读取日志失败: {e}{Style.RESET_ALL}")
 
 
+@_cli_only
 def show_reply_safety_menu():
     """评论/私信回复审查设置"""
     global REPLY_SAFETY_ENABLED, REPLY_SAFETY_BLOCK_ON_INCOMING, REPLY_SAFETY_BLOCK_ON_OUTGOING, REPLY_SAFETY_BLOCKED_KEYWORDS
@@ -3651,6 +3693,7 @@ def show_reply_safety_menu():
             print(f"{Fore.RED}[ERROR] 无效选项{Style.RESET_ALL}")
 
 
+@_cli_only
 def configure_owner_share():
     """Configure opt-in learned-video sharing to the owner's Bilibili UID."""
     from ..services.owner_share import OwnerShareService
@@ -3739,6 +3782,7 @@ def configure_owner_share():
         print(f"{Fore.GREEN}[OK] 主人分享设置已保存{Style.RESET_ALL}")
 
 
+@_cli_only
 def show_private_message_menu():
     """显示私信设置菜单"""
     global PRIVATE_MESSAGE_ENABLED, PRIVATE_MESSAGE_AUTO_REPLY, PRIVATE_MESSAGE_CHECK_INTERVAL, PRIVATE_MESSAGE_MAX_REPLIES
@@ -3900,6 +3944,7 @@ def show_private_message_menu():
             print(f"{Fore.RED}[ERROR] 无效选项！{Style.RESET_ALL}")
 
 
+@_cli_only
 def show_private_message_log():
     if not os.path.exists(PRIVATE_MESSAGE_LOG_FILE):
         print(f"{Fore.YELLOW}[WARN] 暂无私信日志{Style.RESET_ALL}")
@@ -3948,6 +3993,7 @@ def _load_recent_journal_events(limit=20):
     return entries[-limit:]
 
 
+@_cli_only
 def _print_diary_entries(entries):
     if not entries:
         print(f"{Fore.YELLOW}[WARN] 暂无日记{Style.RESET_ALL}")
@@ -3965,6 +4011,7 @@ def _print_diary_entries(entries):
     print(f"{Fore.CYAN}════════════════════════════════════════════════{Style.RESET_ALL}")
 
 
+@_cli_only
 def _print_evolution_items(items):
     if not items:
         print(f"{Fore.YELLOW}[WARN] 暂无自我进化记录{Style.RESET_ALL}")
@@ -4040,6 +4087,7 @@ async def run_manual_self_evolution(apply_result=True):
         print(f"{Fore.GREEN}[OK] 已应用到当前人格/心情{Style.RESET_ALL}")
 
 
+@_cli_only
 def show_diary_evolution_menu():
     """显示日记和自我进化菜单"""
     global DIARY_ENABLED, DIARY_AUTO_ENABLED, DIARY_AUTO_INTERVAL_MINUTES, DIARY_MIN_EVENTS_FOR_AUTO
@@ -4143,6 +4191,7 @@ def show_diary_evolution_menu():
             print(f"{Fore.RED}[ERROR] 无效选项！{Style.RESET_ALL}")
 
 
+@_cli_only
 async def run_manual_agent_goal(goal):
     brain = AgentBrain()
     login_success = await brain.initialize_login()
@@ -4167,6 +4216,7 @@ async def run_manual_agent_goal(goal):
             print(f"   错误: {result.get('error')}")
 
 
+@_cli_only
 def show_agent_skill_menu():
     """Agent技能菜单"""
     global AGENT_ENABLED, AGENT_AUTO_ENABLED, AGENT_DIVE_ENABLED, AGENT_MAX_STEPS_PER_PLAN
@@ -4265,7 +4315,7 @@ async def _manual_send_danmaku(bvid: str, text: str) -> dict:
         return {"code": -1, "msg": f"bilibili_api 导入失败: {e}"}
     if not os.path.exists(COOKIE_FILE):
         return {"code": -1, "msg": "未登录，请先扫码登录"}
-    with open(COOKIE_FILE, 'r', encoding='utf-8') as f:
+    with managed_file_path(COOKIE_FILE).open('r', encoding='utf-8') as f:
         cookies = json.load(f)
     cred = Credential(
         sessdata=cookies.get('SESSDATA', ''),
@@ -4285,6 +4335,7 @@ async def _manual_send_danmaku(bvid: str, text: str) -> dict:
     except Exception as e:
         return {"code": -1, "msg": f"弹幕发送失败: {e}"}
 
+@_cli_only
 def show_up_danmaku_menu():
     """显示UP主关注/弹幕互动设置菜单"""
     global config, UP_FOLLOW_ENABLED, UP_FOLLOW_AUTO_PROB, UP_FOLLOW_MAX_DAILY
@@ -4477,6 +4528,7 @@ def show_up_danmaku_menu():
             print(f"{Fore.GREEN}[OK] 配置已保存！{Style.RESET_ALL}")
 
 
+@_cli_only
 def show_learning_workflow_menu():
     """Configure evidence collection and real Agent deep-learning work."""
     while True:
@@ -4533,6 +4585,7 @@ def show_learning_workflow_menu():
         else:
             print(f"{Fore.RED}[ERROR] 无效选项{Style.RESET_ALL}")
 
+@_cli_only
 def _show_followed_ups():
     """从 bot_memory.json 读取并显示 AI 已关注的UP主列表。"""
     mem_file = MEMORY_FILE
@@ -4583,6 +4636,7 @@ def _show_followed_ups():
     print()  # 空行
     input(f"{Fore.CYAN}按回车返回...{Style.RESET_ALL}")
 
+@_cli_only
 def show_knowledge_base_menu():
     """显示知识库管理菜单"""
     while True:
@@ -4686,6 +4740,7 @@ def _parse_multi_choice(choice_str: str, max_idx: int) -> list[int]:
     
     return sorted(result)
 
+@_cli_only
 async def show_knowledge_tutor_menu():
     """知识辅导菜单：选择知识文件 → 讲解/问答/二次创作/生成HTML"""
     print(f"\n{Fore.CYAN}+============================================================+{Style.RESET_ALL}")
@@ -4764,6 +4819,7 @@ async def show_knowledge_tutor_menu():
         input(f"\n{Fore.CYAN}按回车返回...{Style.RESET_ALL}")
 
 
+@_cli_only
 async def _tutor_session(files: list[tuple[str, str]]):
     """知识辅导交互会话（CLI）- 支持单文件和多文件"""
     tutor = KnowledgeTutor()
@@ -4923,13 +4979,13 @@ async def _tutor_session(files: list[tuple[str, str]]):
 
             html_content = await tutor.generate_html(file_paths, style)
 
-            html_dir = os.path.join(KNOWLEDGE_BASE_DIR, ".html_exports")
+            html_dir = resolve_output_path(Path(KNOWLEDGE_BASE_DIR) / ".html_exports")
             os.makedirs(html_dir, exist_ok=True)
             if is_multi:
                 safe_title = f"multi_{len(files)}files"
             else:
                 safe_title = re.sub(r'[\\/*?:"<>|]', '_', titles[0])[:40]
-            html_path = os.path.join(html_dir, f"{safe_title}_{style}.html")
+            html_path = resolve_output_path(html_dir / f"{safe_title}_{style}.html")
             try:
                 with open(html_path, 'w', encoding='utf-8') as f:
                     f.write(html_content)
@@ -4961,6 +5017,7 @@ async def _tutor_session(files: list[tuple[str, str]]):
         print()
 
 
+@_cli_only
 async def manual_visual_note_analysis():
     """📝 图文学习笔记：下载视频→网格抽帧→AI生成带目录+配图的 Markdown。
     支持 BV 号、完整 B站 URL 或 b23.tv 短链接。
@@ -4969,8 +5026,7 @@ async def manual_visual_note_analysis():
         print(f"{Fore.RED}[ERROR] 图文学习笔记模块未加载，请检查 xingye_bot 包{Style.RESET_ALL}")
         return
 
-    from ..xingye_bot.video_modes import extract_bvid
-    from ..services.platform_adapter import resolve_bilibili_short_url
+    from ..brain.video_analysis import _extract_bvid_async
     from ..core.config import KNOWLEDGE_BASE_DIR
 
     print(f"\n{Fore.CYAN}+{'='*60}+{Style.RESET_ALL}")
@@ -4983,13 +5039,7 @@ async def manual_visual_note_analysis():
         print(f"{Fore.YELLOW}[WARN] 输入为空，已取消{Style.RESET_ALL}")
         return
 
-    bvid = extract_bvid(user_input)
-    if not bvid and "b23.tv" in user_input.lower():
-        try:
-            resolved = await resolve_bilibili_short_url(user_input)
-            bvid = extract_bvid(resolved) if resolved else ""
-        except Exception as e:
-            print(f"{Fore.YELLOW}[WARN] 短链接解析失败: {e}{Style.RESET_ALL}")
+    bvid = await _extract_bvid_async(user_input)
 
     if not bvid:
         print(f"{Fore.RED}[ERROR] 无法识别BV号，请提供完整链接或BV号{Style.RESET_ALL}")
@@ -5002,6 +5052,7 @@ async def manual_visual_note_analysis():
     print(f"\n{Fore.CYAN}正在生成图文笔记，请稍候...{Style.RESET_ALL}")
 
     settings = load_modular_settings()
+    settings.video_download_dir = str(resolve_output_path(settings.video_download_dir, default=CACHE_DIR / "videos"))
     if custom_prompt:
         settings.custom_video_prompt = custom_prompt
     state = BotState()
@@ -5031,10 +5082,10 @@ async def manual_visual_note_analysis():
             vu.delete_downloaded_video(video_path)
 
         # 保存到知识库/图文笔记
-        save_dir = Path(KNOWLEDGE_BASE_DIR) / "图文笔记"
+        save_dir = resolve_output_path(Path(KNOWLEDGE_BASE_DIR) / "图文笔记")
         save_dir.mkdir(parents=True, exist_ok=True)
         safe_title = sanitize_filename(asset.title or bvid)
-        save_path = save_dir / f"{safe_title}_{bvid}.md"
+        save_path = resolve_output_path(save_dir / f"{safe_title}_{bvid}.md")
         save_path.write_text(summary, encoding='utf-8')
 
         # 提取目录
@@ -5079,10 +5130,16 @@ async def video_to_html_bg(query: str | None = None):
     stats = {}
     desc = ''
 
-    print(f"\n{Fore.CYAN}+{'='*60}+{Style.RESET_ALL}")
-    print(f"{Fore.CYAN}|        🎨 视频→网页 — AI生成HTML分析页面                    |{Style.RESET_ALL}")
-    print(f"{Fore.CYAN}+{'='*60}+{Style.RESET_ALL}")
-    print(f"{Fore.YELLOW}[INFO] 支持: B站视频链接 | BV号 | 视频标题 | UP主名字{Style.RESET_ALL}")
+    if _runtime.plugin_mode and query is None:
+        raise RuntimeError("插件模式生成 HTML 必须显式提供 query，不支持终端交互")
+    interactive = query is None and not _runtime.plugin_mode
+    if interactive:
+        print(f"\n{Fore.CYAN}+{'='*60}+{Style.RESET_ALL}")
+        print(f"{Fore.CYAN}|        🎨 视频→网页 — AI生成HTML分析页面                    |{Style.RESET_ALL}")
+        print(f"{Fore.CYAN}+{'='*60}+{Style.RESET_ALL}")
+        print(f"{Fore.YELLOW}[INFO] 支持: B站视频链接 | BV号 | 视频标题 | UP主名字{Style.RESET_ALL}")
+    else:
+        log("开始生成视频 HTML", "INFO")
 
     if query is not None:
         user_input = str(query).strip()
@@ -5090,76 +5147,39 @@ async def video_to_html_bg(query: str | None = None):
         user_input = input(f"\n{Fore.CYAN}请输入视频链接/标题/UP主名字: {Style.RESET_ALL}").strip()
     if not user_input: return
 
-    # 传入 query 时视为非交互调用（AstrBot 指令），所有 input() 均跳过并使用默认值
-    interactive = query is None
 
-    # ── 第一步：判断输入类型（复用 V 功能的 _extract_bvid + _resolve_b23_short）──
-    from ..brain.video_analysis import _extract_bvid, _resolve_b23_short
+    # ── 第一步：在线程中解析原始输入，短链只展开一次 ──
+    from ..brain.video_analysis import _extract_bvid_async
     bvid = None
     title = None
     up_name = None
     up_uid = None
     from_search = False
 
-    raw_bvid = _extract_bvid(user_input)
-    if raw_bvid:
-        if 'b23.tv' in user_input.lower():
-            resolved = await _resolve_b23_short(raw_bvid)
-            if resolved:
-                bvid = resolved
-                log(f"短链接解析: b23.tv/{raw_bvid} -> {bvid}", "RESOLVE")
-            else:
-                print(f"{Fore.RED}[ERROR] 短链接解析失败，尝试直接搜索...{Style.RESET_ALL}")
-                from_search = True
-        else:
-            bvid = raw_bvid
-    if not bvid and not from_search:
-        from_search = True
+    bvid = await _extract_bvid_async(user_input)
+    if bvid and 'b23.tv' in user_input.lower():
+        log(f"短链接已解析为 {bvid}", "RESOLVE")
+    from_search = not bvid
 
     # ── 创建 AgentBrain，加载凭证（复用 V 功能流程）──
     brain = AgentBrain()
     brain.bili._load_credential()
-    cookie_loaded = False
-    if os.path.exists(COOKIE_FILE):
-        with open(COOKIE_FILE, 'r', encoding='utf-8') as f:
-            brain.cookies = json.load(f)
-        cookie_loaded = True
-        log(f"[AUTO] 从本地项目加载到登录Cookie (UID: {brain.cookies.get('DedeUserID','?')})", "LOGIN")
+    brain.cookies = _load_profile_cookies()
+    if brain.cookies:
+        log("已加载当前配置的登录 Cookie", "LOGIN")
     else:
-        # 扫描兄弟项目
-        sibling_dirs = [
-            ("bilibili_learning_bot", "Data/bilibili_cookies.json"),
-            ("bilibili_learning_bot-2.2.1", "Data/bilibili_cookies.json"),
-            ("bilibili_learning_bot-3.0.1", "Data/bilibili_cookies.json"),
-            ("bilibili_learning_bot-2.2.2/bilibili_learning_bot-3.0.0", "Data/bilibili_cookies.json"),
-            ("bilibili_claw", "Data/bilibili_cookies.json"),
-            ("batch_unfollow", "Data/bilibili_cookies.json"),
-        ]
-        for sib_dir, sib_file in sibling_dirs:
-            sibling_cookie = os.path.join(os.path.dirname(BASE_DIR), sib_dir, sib_file)
-            if os.path.exists(sibling_cookie):
-                try:
-                    with open(sibling_cookie, 'r', encoding='utf-8') as f:
-                        brain.cookies = json.load(f)
-                    uid = brain.cookies.get('DedeUserID', '?')
-                    log(f"[AUTO] 从 {sib_dir} 项目加载到登录Cookie (UID: {uid})", "LOGIN")
-                    cookie_loaded = True
-                    break
-                except Exception as e:
-                    log(f'非预期异常: {e}', 'WARN')
-    if not cookie_loaded:
-        print(f"{Fore.YELLOW}[HINT] 未登录(Cookie文件不存在)，部分视频的AI字幕可能需要登录才能获取{Style.RESET_ALL}")
+        log("当前配置未登录，部分视频的 AI 字幕可能需要登录才能获取", "WARN")
 
     # ── 从搜索中选择视频（复用 V 功能的字幕状态检测 + UP主搜索）──
     if from_search:
-        print(f"\n{Fore.CYAN}正在B站搜索: {user_input}...{Style.RESET_ALL}")
+        log(f'\n正在B站搜索: {user_input}...', 'INFO')
         results = await brain.bili.search_bilibili(user_input, limit=12)
         if not results:
-            print(f"{Fore.RED}[ERROR] 未找到相关视频或UP主{Style.RESET_ALL}")
+            log(f'[ERROR] 未找到相关视频或UP主', 'ERROR')
             return
 
         save_search_history(user_input, len(results))
-        print(f"\n{Fore.GREEN}找到 {len(results)} 个相关结果，请选择:{Style.RESET_ALL}")
+        log(f'\n找到 {len(results)} 个相关结果，请选择:', 'SUCCESS')
 
         # ── 字幕状态批量检测（WBI签名，复用V功能逻辑）──
         import hashlib as _hashlib
@@ -5236,29 +5256,30 @@ async def video_to_html_bg(query: str | None = None):
                 if batch_start + 3 < len(bvids):
                     await asyncio.sleep(0.2)
 
-        print(f"{Fore.CYAN}{'─' * 80}{Style.RESET_ALL}")
-        for i, r in enumerate(results):
-            dur = r.get("duration", "??")
-            play = r.get("play", 0)
-            play_str = f"{play/10000:.1f}w" if play >= 10000 else str(play)
-            title_display = r['title'][:50]
-            author = r.get('author', '?')
-            _bvid = r.get('bvid', '')
-            tag = f"  {'📝 有字幕' if sub_status.get(_bvid) else '🔇 无字幕'}" if _bvid in sub_status else ""
-            print(f"  {Fore.YELLOW}{i+1:>2}.{Style.RESET_ALL} {title_display}{tag}")
-            print(f"      {Fore.LIGHTBLACK_EX}@{author}  |  ▶ {play_str}  |  ⏱ {dur}{Style.RESET_ALL}")
-        print(f"{Fore.CYAN}{'─' * 80}{Style.RESET_ALL}")
-        print(f"  {Fore.YELLOW} 0.{Style.RESET_ALL} 取消")
-        print(f"  {Fore.CYAN}输入UP主名字可搜索TA的最新视频{Style.RESET_ALL}")
+        if interactive:
+            print(f"{Fore.CYAN}{'─' * 80}{Style.RESET_ALL}")
+            for i, r in enumerate(results):
+                dur = r.get("duration", "??")
+                play = r.get("play", 0)
+                play_str = f"{play/10000:.1f}w" if play >= 10000 else str(play)
+                title_display = r['title'][:50]
+                author = r.get('author', '?')
+                _bvid = r.get('bvid', '')
+                tag = f"  {'📝 有字幕' if sub_status.get(_bvid) else '🔇 无字幕'}" if _bvid in sub_status else ""
+                print(f"  {Fore.YELLOW}{i+1:>2}.{Style.RESET_ALL} {title_display}{tag}")
+                print(f"      {Fore.LIGHTBLACK_EX}@{author}  |  ▶ {play_str}  |  ⏱ {dur}{Style.RESET_ALL}")
+            print(f"{Fore.CYAN}{'─' * 80}{Style.RESET_ALL}")
+            print(f"  {Fore.YELLOW} 0.{Style.RESET_ALL} 取消")
+            print(f"  {Fore.CYAN}输入UP主名字可搜索TA的最新视频{Style.RESET_ALL}")
 
         if interactive:
             choice = (await loop.run_in_executor(None, input, f"\n{Fore.CYAN}请选择视频编号 (1-{len(results)}): {Style.RESET_ALL}")).strip()
         else:
             choice = "1"
-            print(f"{Fore.CYAN}[AUTO] 非交互模式，默认选择第 1 条结果{Style.RESET_ALL}")
+            log(f'[AUTO] 非交互模式，默认选择第 1 条结果', 'INFO')
 
         if choice == "0" or choice == "":
-            print(f"{Fore.YELLOW}[WARN] 已取消{Style.RESET_ALL}")
+            log(f'[WARN] 已取消', 'WARN')
             return
 
         try:
@@ -5269,16 +5290,16 @@ async def video_to_html_bg(query: str | None = None):
                 title = chosen.get("title", "")
                 up_name = chosen.get("author", "")
                 up_uid = chosen.get("mid")
-                print(f"{Fore.GREEN}[OK] 已选择: {title} - @{up_name}{Style.RESET_ALL}")
+                log(f'[OK] 已选择: {title} - @{up_name}', 'SUCCESS')
             else:
-                print(f"{Fore.RED}[ERROR] 无效选项{Style.RESET_ALL}")
+                log(f'[ERROR] 无效选项', 'ERROR')
                 return
         except ValueError:
             # 非数字 → 搜索UP主
             if len(choice) < 2 or (len(choice) <= 3 and choice.isascii()):
-                print(f"{Fore.RED}[ERROR] 无效输入: '{choice}' — 请输入数字编号或UP主名字{Style.RESET_ALL}")
+                log(f"[ERROR] 无效输入: '{choice}' — 请输入数字编号或UP主名字", 'ERROR')
                 return
-            print(f"{Fore.CYAN}搜索UP主: {choice}...{Style.RESET_ALL}")
+            log(f'搜索UP主: {choice}...', 'INFO')
             try:
                 from bilibili_api import search as bili_search
                 data = await bili_search.search_by_type(
@@ -5288,35 +5309,35 @@ async def video_to_html_bg(query: str | None = None):
                 )
                 user_items = data.get("result") or []
                 if not user_items:
-                    print(f"{Fore.RED}[ERROR] 未找到UP主: {choice}{Style.RESET_ALL}")
+                    log(f'[ERROR] 未找到UP主: {choice}', 'ERROR')
                     return
                 best = user_items[0]
                 up_uid = best.get("mid") or best.get("uid")
                 up_name = best.get("uname") or best.get("name") or choice
                 if up_uid:
                     up_uid = int(up_uid)
-                    print(f"{Fore.GREEN}[OK] 找到UP主: {up_name} (UID: {up_uid}){Style.RESET_ALL}")
-                    print(f"{Fore.CYAN}获取 @{up_name} 的最新视频...{Style.RESET_ALL}")
+                    log(f'[OK] 找到UP主: {up_name} (UID: {up_uid})', 'SUCCESS')
+                    log(f'获取 @{up_name} 的最新视频...', 'INFO')
                     latest = await brain.bili.get_up_videos(up_uid, limit=1)
                     if latest:
                         bvid = latest[0].get("bvid")
                         title = latest[0].get("title", "")
                         if not up_name:
                             up_name = choice
-                        print(f"{Fore.GREEN}[OK] 最新视频: {title}{Style.RESET_ALL}")
+                        log(f'[OK] 最新视频: {title}', 'SUCCESS')
                     else:
-                        print(f"{Fore.RED}[ERROR] 该UP主没有投稿视频{Style.RESET_ALL}")
+                        log(f'[ERROR] 该UP主没有投稿视频', 'ERROR')
                         return
                 else:
-                    print(f"{Fore.RED}[ERROR] 无法获取UP主UID{Style.RESET_ALL}")
+                    log(f'[ERROR] 无法获取UP主UID', 'ERROR')
                     return
             except Exception as e:
-                print(f"{Fore.RED}[ERROR] 搜索UP主失败: {e}{Style.RESET_ALL}")
+                log_exception("搜索UP主失败", e)
                 return
 
     # ── 获取视频信息（复用 V 功能的 _wbi_get）──
     if not title or not up_name:
-        print(f"{Fore.CYAN}获取视频信息...{Style.RESET_ALL}")
+        log(f'获取视频信息...', 'INFO')
         try:
             meta = await brain.bili._wbi_get(
                 'https://api.bilibili.com/x/web-interface/view',
@@ -5343,18 +5364,19 @@ async def video_to_html_bg(query: str | None = None):
                 }
                 desc = vdata.get('desc', '')
             else:
-                print(f"{Fore.RED}[ERROR] 获取视频信息失败: code={vinfo.get('code')}{Style.RESET_ALL}")
+                log(f"[ERROR] 获取视频信息失败: code={vinfo.get('code')}", 'ERROR')
                 return
         except Exception as e:
-            print(f"{Fore.RED}[ERROR] 获取视频信息失败: {e}{Style.RESET_ALL}")
+            log_exception("获取视频信息失败", e)
             return
 
     video_url = f"https://www.bilibili.com/video/{bvid}"
-    print(f"\n{Fore.GREEN}+{'─'*60}+{Style.RESET_ALL}")
-    print(f"{Fore.GREEN}|  视频: {title[:45]}{Style.RESET_ALL}")
-    print(f"{Fore.GREEN}|  UP主: @{up_name}{Style.RESET_ALL}")
-    print(f"{Fore.GREEN}|  链接: {video_url}{Style.RESET_ALL}")
-    print(f"{Fore.GREEN}+{'─'*60}+{Style.RESET_ALL}")
+    if interactive:
+        print(f"\n{Fore.GREEN}+{'─'*60}+{Style.RESET_ALL}")
+        print(f"{Fore.GREEN}|  视频: {title[:45]}{Style.RESET_ALL}")
+        print(f"{Fore.GREEN}|  UP主: @{up_name}{Style.RESET_ALL}")
+        print(f"{Fore.GREEN}|  链接: {video_url}{Style.RESET_ALL}")
+        print(f"{Fore.GREEN}+{'─'*60}+{Style.RESET_ALL}")
 
     # ── 分析方式选择 (与V功能一致) ──
     force_mode = None  # None = 默认智能流程
@@ -5363,31 +5385,32 @@ async def video_to_html_bg(query: str | None = None):
         "4": "subtitle+asr", "5": "subtitle+vision", "6": "asr+vision",
         "7": "all"
     }
-    print(f"\n{Fore.CYAN}选择内容获取方式 (回车=默认智能流程):{Style.RESET_ALL}")
-    print(f"  {Fore.YELLOW}1.{Style.RESET_ALL} 仅获取字幕 — 只获取CC/AI字幕，不下载视频")
-    print(f"  {Fore.YELLOW}2.{Style.RESET_ALL} 仅语音识别 — 下载视频 -> ASR语音转文字")
-    print(f"  {Fore.YELLOW}3.{Style.RESET_ALL} 仅视觉抽帧 — 下载视频 -> 关键帧AI画面分析")
-    print(f"  {Fore.YELLOW}4.{Style.RESET_ALL} 字幕 + 语音识别 — 获取字幕 + 下载视频ASR")
-    print(f"  {Fore.YELLOW}5.{Style.RESET_ALL} 字幕 + 视觉抽帧 — 获取字幕 + 关键帧AI分析")
-    print(f"  {Fore.YELLOW}6.{Style.RESET_ALL} 语音识别 + 视觉抽帧 — 下载视频 -> ASR+画面分析")
-    print(f"  {Fore.YELLOW}7.{Style.RESET_ALL} 全部分析 — 字幕+ASR+抽帧（智能判断，字幕不足时下载）")
+    if interactive:
+        print(f"\n{Fore.CYAN}选择内容获取方式 (回车=默认智能流程):{Style.RESET_ALL}")
+        print(f"  {Fore.YELLOW}1.{Style.RESET_ALL} 仅获取字幕 — 只获取CC/AI字幕，不下载视频")
+        print(f"  {Fore.YELLOW}2.{Style.RESET_ALL} 仅语音识别 — 下载视频 -> ASR语音转文字")
+        print(f"  {Fore.YELLOW}3.{Style.RESET_ALL} 仅视觉抽帧 — 下载视频 -> 关键帧AI画面分析")
+        print(f"  {Fore.YELLOW}4.{Style.RESET_ALL} 字幕 + 语音识别 — 获取字幕 + 下载视频ASR")
+        print(f"  {Fore.YELLOW}5.{Style.RESET_ALL} 字幕 + 视觉抽帧 — 获取字幕 + 关键帧AI分析")
+        print(f"  {Fore.YELLOW}6.{Style.RESET_ALL} 语音识别 + 视觉抽帧 — 下载视频 -> ASR+画面分析")
+        print(f"  {Fore.YELLOW}7.{Style.RESET_ALL} 全部分析 — 字幕+ASR+抽帧（智能判断，字幕不足时下载）")
     am_input = ((await loop.run_in_executor(None, input, f"\n{Fore.CYAN}选择 (1-7, 回车=默认7): {Style.RESET_ALL}")).strip() if interactive else "")
     if am_input in mode_map:
         force_mode = mode_map[am_input]
-        print(f"{Fore.GREEN}[OK] 内容获取方式: {am_input} - {force_mode}{Style.RESET_ALL}")
+        log(f'[OK] 内容获取方式: {am_input} - {force_mode}', 'SUCCESS')
     else:
-        print(f"{Fore.CYAN}[OK] 内容获取方式: 默认智能流程{Style.RESET_ALL}")
+        log(f'[OK] 内容获取方式: 默认智能流程', 'INFO')
 
     # ── 获取视频内容（复用 V 功能的 understand_video_for_decision + 评论弹幕）──
-    print(f"\n{Fore.CYAN}[1/3] 理解视频内容...{Style.RESET_ALL}")
+    log(f'\n[1/3] 理解视频内容...', 'INFO')
     success, subtitle_text = await brain.understand_video_for_decision(bvid, title=title, force_mode=force_mode)
     if success and subtitle_text and len(subtitle_text) > 30:
         ctx = subtitle_text
         preview = ctx[:200].replace('\n', ' ')
-        print(f"{Fore.GREEN}[OK] 视频内容获取成功 ({len(ctx)}字): {preview}...{Style.RESET_ALL}")
+        log(f'[OK] 视频内容获取成功 ({len(ctx)}字)', 'SUCCESS')
     else:
         ctx = f"[视频标题] {title}\n\n[内容理解受限] {subtitle_text}"
-        print(f"{Fore.YELLOW}[WARN] 视频理解受限: {subtitle_text[:120] if subtitle_text else '无内容'}{Style.RESET_ALL}")
+        log("视频理解受限", "WARN")
         # 尝试补评论
         _aid = 0
         try:
@@ -5401,7 +5424,7 @@ async def video_to_html_bg(query: str | None = None):
             _aid = 0
         if _aid:
             try:
-                print(f"  {Fore.CYAN}📝 获取热门评论补充...{Style.RESET_ALL}")
+                log(f'  📝 获取热门评论补充...', 'INFO')
                 comments = await brain.bili.get_hot_comments(_aid, limit=10)
                 if comments:
                     lines = []
@@ -5412,30 +5435,31 @@ async def video_to_html_bg(query: str | None = None):
                             lines.append(f"@{uname}: {msg}")
                     if lines:
                         ctx += f"\n\n[热门评论 Top{len(lines)}]\n" + "\n".join(lines)
-                        print(f"  {Fore.GREEN}✓ 获取到 {len(lines)} 条热门评论{Style.RESET_ALL}")
+                        log(f'  ✓ 获取到 {len(lines)} 条热门评论', 'SUCCESS')
             except Exception as _e:
-                print(f"  {Fore.YELLOW}⚠ 评论获取失败: {_e}{Style.RESET_ALL}")
+                log_exception("视频评论获取失败", _e)
     
     # 模板选择
-    print(f"\n{Fore.CYAN}🎨 视觉风格 (回车=auto/自动选择):{Style.RESET_ALL}")
-    print(f"  {Fore.YELLOW}1.🖼️ Claude 幻灯片 (推荐){Style.RESET_ALL} — 基于 bilibili_learning_bot_slides.html，可选完整分段动画+亮暗切换")
-    print(f"  2.🌙 暗夜粒子 — 暗色+红金粒子Canvas动画+科技感")
-    print(f"  3.💡 极简白昼 — 亮色现代+干净排版+阅读优先")
-    print(f"  4.🎞️ 幻灯片叙事 — 多页翻页+章节导航+动画入场")
-    print(f"  5.🃏 卡片画廊 — 卡片网格+悬停动效+信息密度高")
-    print(f"  6.🍱 Bento 网格 — 卡片拼图式不规则网格布局，iOS小组件风格")
-    print(f"  7.🫧 玻璃拟态 — 毛玻璃半透明+背景模糊，现代SaaS风格")
-    print(f"  8.🌌 极光渐变 — 流动渐变网格背景+梦幻色彩过渡")
-    print(f"  9.⚡ 新野蛮主义 — 粗黑边框+高对比度+大胆撞色+Figma风格")
-    print(f"  10.🌑 深色OLED — 纯黑背景+霓虹点缀+护眼暗色主题")
-    print(f"  11.🏙️ 赛博朋克 — 霓虹灯效+暗黑背景+科幻故障风")
-    print(f"  12.💎 新拟态 — 柔和UI/内凹外凸圆角/柔和阴影/智能家居控制台风格")
-    print(f"  13.🧊 液态玻璃 — 毛玻璃透明层+透光层次感/磨砂质感/OS高端科技产品官网")
-    print(f"  14.📻 复古主义 — 像素风/复古GUI/老式操作系统质感/80年代流行元素/早期Windows/Mac界面")
-    print(f"  15.🔲 Linear风格 — 线性色彩背景/发光边框/未来科技UI/Web3项目/加密工具Landing Page")
-    print(f"  16.🌈 新变风 — 色彩渐变/科技或潮流/视觉抓眼球/Landing Page创意工作室官网")
-    print(f"  17.☁️ 柔和流行 — 柔和力和玩具色/手绘插画/卡通插画/圆润字体/儿童APP/UI/健康儿童产品界面")
-    print(f"  18.🤖 PromptPort风格 — 深黑背景+霓虹绿青发光+Emoji图标+巨大标题+模块卡片+AI/Web3科技极简")
+    if interactive:
+        print(f"\n{Fore.CYAN}🎨 视觉风格 (回车=auto/自动选择):{Style.RESET_ALL}")
+        print(f"  {Fore.YELLOW}1.🖼️ Claude 幻灯片 (推荐){Style.RESET_ALL} — 基于 bilibili_learning_bot_slides.html，可选完整分段动画+亮暗切换")
+        print(f"  2.🌙 暗夜粒子 — 暗色+红金粒子Canvas动画+科技感")
+        print(f"  3.💡 极简白昼 — 亮色现代+干净排版+阅读优先")
+        print(f"  4.🎞️ 幻灯片叙事 — 多页翻页+章节导航+动画入场")
+        print(f"  5.🃏 卡片画廊 — 卡片网格+悬停动效+信息密度高")
+        print(f"  6.🍱 Bento 网格 — 卡片拼图式不规则网格布局，iOS小组件风格")
+        print(f"  7.🫧 玻璃拟态 — 毛玻璃半透明+背景模糊，现代SaaS风格")
+        print(f"  8.🌌 极光渐变 — 流动渐变网格背景+梦幻色彩过渡")
+        print(f"  9.⚡ 新野蛮主义 — 粗黑边框+高对比度+大胆撞色+Figma风格")
+        print(f"  10.🌑 深色OLED — 纯黑背景+霓虹点缀+护眼暗色主题")
+        print(f"  11.🏙️ 赛博朋克 — 霓虹灯效+暗黑背景+科幻故障风")
+        print(f"  12.💎 新拟态 — 柔和UI/内凹外凸圆角/柔和阴影/智能家居控制台风格")
+        print(f"  13.🧊 液态玻璃 — 毛玻璃透明层+透光层次感/磨砂质感/OS高端科技产品官网")
+        print(f"  14.📻 复古主义 — 像素风/复古GUI/老式操作系统质感/80年代流行元素/早期Windows/Mac界面")
+        print(f"  15.🔲 Linear风格 — 线性色彩背景/发光边框/未来科技UI/Web3项目/加密工具Landing Page")
+        print(f"  16.🌈 新变风 — 色彩渐变/科技或潮流/视觉抓眼球/Landing Page创意工作室官网")
+        print(f"  17.☁️ 柔和流行 — 柔和力和玩具色/手绘插画/卡通插画/圆润字体/儿童APP/UI/健康儿童产品界面")
+        print(f"  18.🤖 PromptPort风格 — 深黑背景+霓虹绿青发光+Emoji图标+巨大标题+模块卡片+AI/Web3科技极简")
     t = ((await loop.run_in_executor(None, input, f"{Fore.CYAN}> {Style.RESET_ALL}")).strip() if interactive else "")
     styles = {'1':'claude_slides','2':'dark','3':'light','4':'slide','5':'card','6':'bento','7':'glass','8':'aurora',
               '9':'neobrutal','10':'oled','11':'cyberpunk','12':'neumorphism','13':'liquid_glass','14':'nostalgic',
@@ -5443,37 +5467,41 @@ async def video_to_html_bg(query: str | None = None):
     style = styles.get(t, 'auto')
 
     enhanced_animations = False
-    if style == 'claude_slides':
-        print(f"\n{Fore.CYAN}✨ 是否加入更多分段动画？{Style.RESET_ALL}")
-        print(f"  1. 是 — 卡片、列表、流程步骤依次入场")
-        print(f"  2. 否 — 保持轻量淡入动画（默认）")
+    if interactive and style == 'claude_slides':
+        if interactive:
+            print(f"\n{Fore.CYAN}✨ 是否加入更多分段动画？{Style.RESET_ALL}")
+            print(f"  1. 是 — 卡片、列表、流程步骤依次入场")
+            print(f"  2. 否 — 保持轻量淡入动画（默认）")
         enhanced_animations = (await loop.run_in_executor(None, input, f"{Fore.CYAN}> {Style.RESET_ALL}")).strip() == '1'
 
     # 输出格式选择
-    print(f"\n{Fore.CYAN}📄 输出格式 (回车=auto/AI自动判断):{Style.RESET_ALL}")
-    print(f"  1.📄 正常网页 — 标准文章/知识卡片布局")
-    print(f"  2.🎞️ PPT演示 — 多页幻灯片+键盘翻页+动画")
-    print(f"  3.🎬 动画讲解 — 步骤动画+渐进展示+叙事节奏")
-    print(f"  4.🤖 AI建议 — 让AI分析内容后推荐最佳格式")
-    print(f"  5.🔬 技术科普动画 — 知识图解+视觉化拆解+3B1B风格叙事")
-    print(f"  6.🔀 PPT+科普融合 — 幻灯片框架+图解动画混合，可自定义融合比例")
+    if interactive:
+        print(f"\n{Fore.CYAN}📄 输出格式 (回车=auto/AI自动判断):{Style.RESET_ALL}")
+        print(f"  1.📄 正常网页 — 标准文章/知识卡片布局")
+        print(f"  2.🎞️ PPT演示 — 多页幻灯片+键盘翻页+动画")
+        print(f"  3.🎬 动画讲解 — 步骤动画+渐进展示+叙事节奏")
+        print(f"  4.🤖 AI建议 — 让AI分析内容后推荐最佳格式")
+        print(f"  5.🔬 技术科普动画 — 知识图解+视觉化拆解+3B1B风格叙事")
+        print(f"  6.🔀 PPT+科普融合 — 幻灯片框架+图解动画混合，可自定义融合比例")
     fmt_input = ((await loop.run_in_executor(None, input, f"{Fore.CYAN}> {Style.RESET_ALL}")).strip() if interactive else "")
     fmt_map = {'1':'webpage','2':'ppt','3':'animation','4':'ai_suggest','5':'tech_explainer','6':'ppt_explainer'}
     output_format = fmt_map.get(fmt_input, 'auto')
 
     # PPT+科普融合：可选自定义融合描述
     ppt_explainer_blend = ""
-    if output_format == 'ppt_explainer':
-        print(f"\n{Fore.CYAN}🔀 融合比例/自定义描述 (回车=AI自动融合):{Style.RESET_ALL}")
-        print(f"  例如: 70%PPT幻灯片+30%图解动画 / 前一半PPT后一半图解 / 每页PPT配SVG示意图")
+    if interactive and output_format == 'ppt_explainer':
+        if interactive:
+            print(f"\n{Fore.CYAN}🔀 融合比例/自定义描述 (回车=AI自动融合):{Style.RESET_ALL}")
+            print(f"  例如: 70%PPT幻灯片+30%图解动画 / 前一半PPT后一半图解 / 每页PPT配SVG示意图")
         blend_input = (await loop.run_in_executor(None, input, f"{Fore.CYAN}> {Style.RESET_ALL}")).strip()
         ppt_explainer_blend = blend_input
 
     # 自定义页数 (仅PPT/动画/auto格式有意义)
     page_count = 0  # 0=AI自动
     if output_format in ('ppt', 'animation', 'tech_explainer', 'ppt_explainer', 'auto', 'ai_suggest'):
-        print(f"\n{Fore.CYAN}📑 页数设置 (回车=AI自动):{Style.RESET_ALL}")
-        print(f"  输入数字指定页数，如 5 或 5-10，直接回车则AI自动决定")
+        if interactive:
+            print(f"\n{Fore.CYAN}📑 页数设置 (回车=AI自动):{Style.RESET_ALL}")
+            print(f"  输入数字指定页数，如 5 或 5-10，直接回车则AI自动决定")
         pc_input = ((await loop.run_in_executor(None, input, f"{Fore.CYAN}> {Style.RESET_ALL}")).strip() if interactive else "")
         if pc_input:
             try:
@@ -5482,42 +5510,45 @@ async def video_to_html_bg(query: str | None = None):
                     min_p = int(parts[0].strip())
                     max_p = int(parts[1].strip())
                     page_count = (min_p, max_p)
-                    print(f"  {Fore.GREEN}✓ 页数范围: {min_p}~{max_p} 页{Style.RESET_ALL}")
+                    log(f'  ✓ 页数范围: {min_p}~{max_p} 页', 'SUCCESS')
                 else:
                     page_count = int(pc_input)
-                    print(f"  {Fore.GREEN}✓ 页数: {page_count} 页{Style.RESET_ALL}")
+                    log(f'  ✓ 页数: {page_count} 页', 'SUCCESS')
             except ValueError:
-                print(f"  {Fore.YELLOW}⚠ 格式无效，使用AI自动决定{Style.RESET_ALL}")
+                log(f'  ⚠ 格式无效，使用AI自动决定', 'WARN')
                 page_count = 0
 
     # 详细程度
-    print(f"\n{Fore.CYAN}📏 详细程度 (默认=2):{Style.RESET_ALL}")
-    print(f"  1.✂️ 简短 — 精简要点，快速浏览")
-    print(f"  2.📖 中长 — 内容充实，适合阅读")
-    print(f"  3.📚 很长 — 深度展开，面面俱到")
+    if interactive:
+        print(f"\n{Fore.CYAN}📏 详细程度 (默认=2):{Style.RESET_ALL}")
+        print(f"  1.✂️ 简短 — 精简要点，快速浏览")
+        print(f"  2.📖 中长 — 内容充实，适合阅读")
+        print(f"  3.📚 很长 — 深度展开，面面俱到")
     dl_input = ((await loop.run_in_executor(None, input, f"{Fore.CYAN}> {Style.RESET_ALL}")).strip() if interactive else "")
     detail_map = {'1':'brief','2':'medium','3':'long'}
     detail_level = detail_map.get(dl_input, 'medium')
     
     # 自定义提示词
-    print(f"\n{Fore.CYAN}✏️ 自定义提示词/系统指令 (可选, 回车跳过):{Style.RESET_ALL}")
-    print(f"  {Fore.LIGHTBLACK_EX}例如: 用学术风格写 / 面向小学生 / 侧重数据分析 / 翻译成英文{Style.RESET_ALL}")
+    if interactive:
+        print(f"\n{Fore.CYAN}✏️ 自定义提示词/系统指令 (可选, 回车跳过):{Style.RESET_ALL}")
+        print(f"  {Fore.LIGHTBLACK_EX}例如: 用学术风格写 / 面向小学生 / 侧重数据分析 / 翻译成英文{Style.RESET_ALL}")
     custom = ((await loop.run_in_executor(None, input, f"{Fore.CYAN}> {Style.RESET_ALL}")).strip() if interactive else "")
 
     # ── 弹幕/评论是否包含到 HTML 中 ──
     include_danmaku_comment = False
-    print(f"\n{Fore.CYAN}💬 是否将弹幕和热门评论也加入到HTML内容中？{Style.RESET_ALL}")
-    print(f"  {Fore.YELLOW}1.{Style.RESET_ALL} 是 — 获取弹幕+热门评论，AI会整合到HTML中（更丰富）")
-    print(f"  {Fore.YELLOW}2.{Style.RESET_ALL} 否 — 仅使用视频字幕内容（更快更精简）")
+    if interactive:
+        print(f"\n{Fore.CYAN}💬 是否将弹幕和热门评论也加入到HTML内容中？{Style.RESET_ALL}")
+        print(f"  {Fore.YELLOW}1.{Style.RESET_ALL} 是 — 获取弹幕+热门评论，AI会整合到HTML中（更丰富）")
+        print(f"  {Fore.YELLOW}2.{Style.RESET_ALL} 否 — 仅使用视频字幕内容（更快更精简）")
     dc_input = ((await loop.run_in_executor(None, input, f"{Fore.CYAN}> (回车=默认:否) {Style.RESET_ALL}")).strip() if interactive else "")
     if dc_input == "1":
         include_danmaku_comment = True
-        print(f"{Fore.GREEN}[OK] 将获取弹幕和评论并加入HTML{Style.RESET_ALL}")
+        log(f'[OK] 将获取弹幕和评论并加入HTML', 'SUCCESS')
 
         # 获取弹幕
         _danmaku_text = ""
         try:
-            print(f"  {Fore.CYAN}📡 正在获取弹幕...{Style.RESET_ALL}")
+            log(f'  📡 正在获取弹幕...', 'INFO')
             from bilibili_api import Credential as _Cred
             _cred = None
             if brain.cookies:
@@ -5530,16 +5561,16 @@ async def video_to_html_bg(query: str | None = None):
                     _danmaku_text = "\n".join(_dm_texts[:100]) + "\n...[省略中间弹幕]...\n" + "\n".join(_dm_texts[-100:])
                 else:
                     _danmaku_text = "\n".join(_dm_texts)
-                print(f"  {Fore.GREEN}✓ 获取到 {len(_dm_texts)} 条弹幕{Style.RESET_ALL}")
+                log(f'  ✓ 获取到 {len(_dm_texts)} 条弹幕', 'SUCCESS')
             else:
-                print(f"  {Fore.YELLOW}⚠ 未获取到弹幕{Style.RESET_ALL}")
+                log(f'  ⚠ 未获取到弹幕', 'WARN')
         except Exception as _de:
-            print(f"  {Fore.YELLOW}⚠ 弹幕获取失败: {_de}{Style.RESET_ALL}")
+            log_exception("视频弹幕获取失败", _de)
 
         # 获取热门评论（如果还没获取过）
         _comment_text = ""
         try:
-            print(f"  {Fore.CYAN}📝 正在获取热门评论...{Style.RESET_ALL}")
+            log(f'  📝 正在获取热门评论...', 'INFO')
             _aid_for_cmt = 0
             try:
                 _meta_cmt = await brain.bili._wbi_get(
@@ -5562,9 +5593,9 @@ async def video_to_html_bg(query: str | None = None):
                             _clines.append(f"@{_uname}: {_msg}")
                     if _clines:
                         _comment_text = "\n".join(_clines)
-                        print(f"  {Fore.GREEN}✓ 获取到 {len(_clines)} 条热门评论{Style.RESET_ALL}")
+                        log(f'  ✓ 获取到 {len(_clines)} 条热门评论', 'SUCCESS')
         except Exception as _ce:
-            print(f"  {Fore.YELLOW}⚠ 评论获取失败: {_ce}{Style.RESET_ALL}")
+                log_exception("视频评论获取失败", _ce)
 
         # 组装弹幕+评论文本块
         _extra_content_parts = []
@@ -5576,12 +5607,13 @@ async def video_to_html_bg(query: str | None = None):
         if _extra_content_parts:
             ctx = ctx + "\n\n--- 以下为观众互动内容（弹幕+评论），请酌情在HTML中展示 ---\n\n" + "\n\n".join(_extra_content_parts)
     else:
-        print(f"{Fore.CYAN}[OK] 不包含弹幕和评论{Style.RESET_ALL}")
+        log(f'[OK] 不包含弹幕和评论', 'INFO')
 
     # ── 前后固定页设置 ──
-    print(f"\n{Fore.CYAN}📐 前后固定页设置 (回车=保留默认):{Style.RESET_ALL}")
-    print(f"  默认前两页=封面+数据概览，最后两页=金句+总结")
-    print(f"  输入 n=AI自由设计所有页面，或输入自定义描述")
+    if interactive:
+        print(f"\n{Fore.CYAN}📐 前后固定页设置 (回车=保留默认):{Style.RESET_ALL}")
+        print(f"  默认前两页=封面+数据概览，最后两页=金句+总结")
+        print(f"  输入 n=AI自由设计所有页面，或输入自定义描述")
     slide_frame_input = ((await loop.run_in_executor(None, input, f"{Fore.CYAN}> {Style.RESET_ALL}")).strip() if interactive else "")
     slide_frame_custom = slide_frame_input  # ''=默认, 'n'=自由设计, 其他=自定义描述
 
@@ -5596,206 +5628,211 @@ async def video_to_html_bg(query: str | None = None):
             await asyncio.sleep(0.08)
             i += 1
         print(f"\r{Fore.GREEN}[2/3] AI生成完成!{' ' * 20}{Style.RESET_ALL}")
-    _spinner_task = asyncio.create_task(_show_spinner())
-    _style_descs = {
-        'dark': '暗夜粒子风格：暗色背景(#0a0a1a)+红金配色(#e94560/#feca57)+Canvas粒子动画，科技感十足，适合科技/游戏/深度内容',
-        'light': '极简白昼风格：纯白/浅灰背景+干净排版+大量留白，阅读优先，适合知识/教程/教育类内容',
-        'slide': '幻灯片叙事风格：多页翻页+章节导航+入场动画+底部进度点，每页聚焦一个主题',
-        'card': '卡片画廊风格：卡片网格布局+悬停动效(hover放大/阴影)+信息密度高，适合盘点/对比类内容',
-        'claude_slides': 'Claude幻灯片风格：基于 bilibili_learning_bot_slides.html，白/黑/灰+暖橙强调色、亮暗切换、进度条与翻页动画',
-        'bento': 'Bento便当网格风格：2025最热趋势！不规则卡片拼图式网格布局，大小不一的圆角卡片错落排列，Apple风格留白，适合产品展示/功能亮点/知识拆解',
-        'glass': '玻璃拟态风格：毛玻璃半透明卡片(backdrop-filter:blur)+柔和渐变背景+细腻边框+多层景深感，现代SaaS/高端品牌风格',
-        'aurora': '极光渐变风格：流动的渐变色网格背景(Aurora Gradient Mesh)+梦幻色彩过渡(紫蓝绿粉融合)+柔和发光卡片，视觉冲击力强',
-        'neobrutal': '新野蛮主义风格：粗黑实线边框(3-4px)+高对比度纯色块+大胆撞色(黄底黑字/粉底蓝字)+硬阴影(offset 4px 4px 0 #000)+Figma社区流行风格',
-        'oled': '深色OLED风格：纯黑背景(#000)+暗色卡片(#111/#1a1a1a)+低亮度霓虹点缀(柔和紫/青/橙)+护眼设计+适合夜间阅读/代码技术内容',
-        'cyberpunk': '赛博朋克风格：暗黑背景+霓虹灯效(cyan/magenta/yellow glow)+故障风文字效果+扫描线+网格线+终端字体，适合科技/科幻/游戏内容',
-        'neumorphism': '新拟态(Neumorphism)风格：柔和UI设计，内凹外凸圆角元素(通过多层box-shadow实现)+柔和单色系(通常浅灰/米白)+智能家居控制台/音乐播放器/计算器风格，整体有塑料浮雕感，注意对比度要够用',
-        'liquid_glass': '液态玻璃(Liquid Glass)风格：Apple Vision Pro灵感，多层毛玻璃透明层(backdrop-filter:blur saturate brightness)+透光层次感+磨砂质感+折射高光+OS高端科技产品官网/Dashboard/VR界面，通透轻盈的视觉体验',
-        'nostalgic': '复古主义(Nostalgic)风格：像素风字体/复古GUI窗口样式/老式操作系统质感(Windows 95/Mac OS 9)/80-90年代流行元素(CGI/荧光色/点阵图案)，像素艺术图标+等宽或复古衬线字体+早期计算机美学，创意工作室/插画/设计师个人站',
-        'linear': 'Linear(Linear Design)风格：受Linear App启发，纯色渐变背景(紫→蓝→青)+发光边框/输入框+未来科技UI感+极简排版+Web3项目/加密工具/Landing Page/开发者工具，https://linear.app 风格',
-        'gradient_new': '新变风(New Gradient)风格：色彩鲜艳大胆渐变(不限于传统配色，可紫绿撞色/橙粉融合等)+科技或潮流感+视觉抓眼球+Landing Page/创意工作室/品牌官网，https://www.vercel.com 或 https://rabbopass.com 风格参考',
-        'soft_pop': '柔和流行(Soft Pop)风格：柔和力和玩具色调(Muted pastels/糖果色)+手绘插画/卡通插画元素+圆润字体(无衬线圆体)+可爱按钮和卡片+儿童APP/UI/健康产品/亲子类界面，现代流行APP如小红书/得物/潮玩类产品界面',
-        'promptport': 'PromptPort风格(AI-Native/Web3科技极简)：纯黑背景(#000000)+霓虹绿青强调色(#00FFAA)+紫蓝渐变辅助+极简几何无衬线字体(Inter/Space Grotesk)+超大标题(Bold/ExtraBold)+模块化卡片网格(半透明#1A1A1A+发光微边框)+Emoji图标系统+柔和光晕按钮+单页滚动叙事布局+大量留白+AI产品/Web3/开发者工具/数字资产类官网风格，参考 https://promptport.ai',
-    }
-    sp = _style_descs.get(style, f"使用 {style} 视觉风格") if style != 'auto' else "自动选择最合适的视觉风格"
+    _spinner_task = asyncio.create_task(_show_spinner()) if interactive else None
+    if not interactive:
+        log("[2/3] AI 正在生成 HTML", "INFO")
+    try:
+        _style_descs = {
+            'dark': '暗夜粒子风格：暗色背景(#0a0a1a)+红金配色(#e94560/#feca57)+Canvas粒子动画，科技感十足，适合科技/游戏/深度内容',
+            'light': '极简白昼风格：纯白/浅灰背景+干净排版+大量留白，阅读优先，适合知识/教程/教育类内容',
+            'slide': '幻灯片叙事风格：多页翻页+章节导航+入场动画+底部进度点，每页聚焦一个主题',
+            'card': '卡片画廊风格：卡片网格布局+悬停动效(hover放大/阴影)+信息密度高，适合盘点/对比类内容',
+            'claude_slides': 'Claude幻灯片风格：基于 bilibili_learning_bot_slides.html，白/黑/灰+暖橙强调色、亮暗切换、进度条与翻页动画',
+            'bento': 'Bento便当网格风格：2025最热趋势！不规则卡片拼图式网格布局，大小不一的圆角卡片错落排列，Apple风格留白，适合产品展示/功能亮点/知识拆解',
+            'glass': '玻璃拟态风格：毛玻璃半透明卡片(backdrop-filter:blur)+柔和渐变背景+细腻边框+多层景深感，现代SaaS/高端品牌风格',
+            'aurora': '极光渐变风格：流动的渐变色网格背景(Aurora Gradient Mesh)+梦幻色彩过渡(紫蓝绿粉融合)+柔和发光卡片，视觉冲击力强',
+            'neobrutal': '新野蛮主义风格：粗黑实线边框(3-4px)+高对比度纯色块+大胆撞色(黄底黑字/粉底蓝字)+硬阴影(offset 4px 4px 0 #000)+Figma社区流行风格',
+            'oled': '深色OLED风格：纯黑背景(#000)+暗色卡片(#111/#1a1a1a)+低亮度霓虹点缀(柔和紫/青/橙)+护眼设计+适合夜间阅读/代码技术内容',
+            'cyberpunk': '赛博朋克风格：暗黑背景+霓虹灯效(cyan/magenta/yellow glow)+故障风文字效果+扫描线+网格线+终端字体，适合科技/科幻/游戏内容',
+            'neumorphism': '新拟态(Neumorphism)风格：柔和UI设计，内凹外凸圆角元素(通过多层box-shadow实现)+柔和单色系(通常浅灰/米白)+智能家居控制台/音乐播放器/计算器风格，整体有塑料浮雕感，注意对比度要够用',
+            'liquid_glass': '液态玻璃(Liquid Glass)风格：Apple Vision Pro灵感，多层毛玻璃透明层(backdrop-filter:blur saturate brightness)+透光层次感+磨砂质感+折射高光+OS高端科技产品官网/Dashboard/VR界面，通透轻盈的视觉体验',
+            'nostalgic': '复古主义(Nostalgic)风格：像素风字体/复古GUI窗口样式/老式操作系统质感(Windows 95/Mac OS 9)/80-90年代流行元素(CGI/荧光色/点阵图案)，像素艺术图标+等宽或复古衬线字体+早期计算机美学，创意工作室/插画/设计师个人站',
+            'linear': 'Linear(Linear Design)风格：受Linear App启发，纯色渐变背景(紫→蓝→青)+发光边框/输入框+未来科技UI感+极简排版+Web3项目/加密工具/Landing Page/开发者工具，https://linear.app 风格',
+            'gradient_new': '新变风(New Gradient)风格：色彩鲜艳大胆渐变(不限于传统配色，可紫绿撞色/橙粉融合等)+科技或潮流感+视觉抓眼球+Landing Page/创意工作室/品牌官网，https://www.vercel.com 或 https://rabbopass.com 风格参考',
+            'soft_pop': '柔和流行(Soft Pop)风格：柔和力和玩具色调(Muted pastels/糖果色)+手绘插画/卡通插画元素+圆润字体(无衬线圆体)+可爱按钮和卡片+儿童APP/UI/健康产品/亲子类界面，现代流行APP如小红书/得物/潮玩类产品界面',
+            'promptport': 'PromptPort风格(AI-Native/Web3科技极简)：纯黑背景(#000000)+霓虹绿青强调色(#00FFAA)+紫蓝渐变辅助+极简几何无衬线字体(Inter/Space Grotesk)+超大标题(Bold/ExtraBold)+模块化卡片网格(半透明#1A1A1A+发光微边框)+Emoji图标系统+柔和光晕按钮+单页滚动叙事布局+大量留白+AI产品/Web3/开发者工具/数字资产类官网风格，参考 https://promptport.ai',
+        }
+        sp = _style_descs.get(style, f"使用 {style} 视觉风格") if style != 'auto' else "自动选择最合适的视觉风格"
 
-    # ── Claude 系列 + PPT/动画格式 → 使用专业管道（完整设计系统+CSS/JS模板）──
-    # claude_slides 本身即是幻灯片风格，不依赖 output_format
-    if style in ('claude', 'claude_slides_v2'):
-        style = 'claude_slides'
-    is_claude_style = style == 'claude_slides'
-    is_slide_format = output_format in ('ppt', 'animation', 'tech_explainer', 'ppt_explainer') or style == 'claude_slides'
+        # ── Claude 系列 + PPT/动画格式 → 使用专业管道（完整设计系统+CSS/JS模板）──
+        # claude_slides 本身即是幻灯片风格，不依赖 output_format
+        if style in ('claude', 'claude_slides_v2'):
+            style = 'claude_slides'
+        is_claude_style = style == 'claude_slides'
+        is_slide_format = output_format in ('ppt', 'animation', 'tech_explainer', 'ppt_explainer') or style == 'claude_slides'
 
-    from ..xingye_bot.settings import load_settings as _ls
-    from ..xingye_bot.llm import ModelClient as _MC
-    from ..xingye_bot.state import BotState as _BS
-    _s = _ls()
-    client = _MC(_s, _BS())
+        from ..xingye_bot.settings import load_settings as _ls
+        from ..xingye_bot.llm import ModelClient as _MC
+        from ..xingye_bot.state import BotState as _BS
+        _s = _ls()
+        client = _MC(_s, _BS())
 
-    html = ""
-    if is_claude_style and is_slide_format:
-        # 专业管道: build_slide_prompt (含Claude设计系统+完整字幕) → LLM → build_full_html (CSS/JS模板包装)
-        try:
-            from ..services.video_to_ppt import build_slide_prompt, build_full_html
+        html = ""
+        if is_claude_style and is_slide_format:
+            # 专业管道: build_slide_prompt (含Claude设计系统+完整字幕) → LLM → build_full_html (CSS/JS模板包装)
+            try:
+                from ..services.video_to_ppt import build_slide_prompt, build_full_html
 
-            video_info = {
-                'title': title,
-                'author': up_name,
-                'bvid': bvid,
-                'url': video_url,
-                'desc': (desc or '')[:500],
-                'stats': {
-                    'view': stats.get('view', '??'),
-                    'like': stats.get('like', '??'),
-                    'coin': stats.get('coin', '??'),
-                    'favorite': stats.get('favorite', '??'),
-                    'danmaku': stats.get('danmaku', '??'),
-                    'comment': stats.get('comment', '??'),
-                    'duration': stats.get('duration', '??'),
+                video_info = {
+                    'title': title,
+                    'author': up_name,
+                    'bvid': bvid,
+                    'url': video_url,
+                    'desc': (desc or '')[:500],
+                    'stats': {
+                        'view': stats.get('view', '??'),
+                        'like': stats.get('like', '??'),
+                        'coin': stats.get('coin', '??'),
+                        'favorite': stats.get('favorite', '??'),
+                        'danmaku': stats.get('danmaku', '??'),
+                        'comment': stats.get('comment', '??'),
+                        'duration': stats.get('duration', '??'),
+                    }
                 }
-            }
 
-            rich_prompt = build_slide_prompt(
-                video_info,
-                ctx,
-                style,
-                custom_prompt=custom,
-                enhanced_animations=enhanced_animations,
-            )
+                rich_prompt = build_slide_prompt(
+                    video_info,
+                    ctx,
+                    style,
+                    custom_prompt=custom,
+                    enhanced_animations=enhanced_animations,
+                )
             
-            # 详细程度注入
-            _detail_hints = {
-                'brief': "\n\n【详细程度：简短】请精简提炼核心要点，每个slide只保留最关键的信息。减少修饰性文字，用bullet point代替长篇段落。",
-                'medium': "\n\n【详细程度：中长】请保持内容充实但不冗长，每个知识点给出必要说明即可。",
-                'long': "\n\n【详细程度：很长】请深度展开每个知识点，充分展开论述，引用原文对话/案例，每个slide内容要非常充实，不要省略任何重要细节。"
+                # 详细程度注入
+                _detail_hints = {
+                    'brief': "\n\n【详细程度：简短】请精简提炼核心要点，每个slide只保留最关键的信息。减少修饰性文字，用bullet point代替长篇段落。",
+                    'medium': "\n\n【详细程度：中长】请保持内容充实但不冗长，每个知识点给出必要说明即可。",
+                    'long': "\n\n【详细程度：很长】请深度展开每个知识点，充分展开论述，引用原文对话/案例，每个slide内容要非常充实，不要省略任何重要细节。"
+                }
+                rich_prompt += _detail_hints.get(detail_level, '')
+            
+                if page_count:
+                    if isinstance(page_count, tuple):
+                        rich_prompt += f"\n\n【页数要求】严格生成 {page_count[0]}~{page_count[1]} 个slide，不要少于{page_count[0]}个，不要超过{page_count[1]}个。"
+                    else:
+                        rich_prompt += f"\n\n【页数要求】严格生成正好 {page_count} 个slide，不多不少。"
+                elif style == 'claude_slides':
+                    # 用户未指定页数 → AI自动，但确保不偷懒
+                    rich_prompt += "\n\n【内容要求】视频内容很长，请充分展开每个章节，不要省略任何重要知识点。每个slide内容要充实，不是一两句话就带过。"
+                if slide_frame_custom:
+                    if slide_frame_custom == 'n':
+                        rich_prompt += "\n\n【前后固定页】取消默认的封面+数据概览+金句总结固定页模板。所有slide由你自由设计内容结构，不必遵循Slide1封面/Slide2数据/最后页总结的套路。"
+                    else:
+                        rich_prompt += f"\n\n【前后固定页自定义】{slide_frame_custom}"
+                if ppt_explainer_blend:
+                    rich_prompt += f"\n\n【PPT+科普融合自定义】{ppt_explainer_blend}"
+
+                resp = await client.chat([{"role":"user","content":rich_prompt}], purpose="html_gen")
+                slide_html = resp.strip()
+                if slide_html.startswith('```'):
+                    parts = slide_html.split('```', 2)
+                    slide_html = parts[1].strip() if len(parts) > 1 else slide_html
+                    if slide_html.lower().startswith('html'):
+                        slide_html = slide_html[4:].strip()
+                # 用完整CSS/JS模板包装（Inter字体+Lucide图标+暖橙配色+亮暗切换+翻页动画）
+                html = build_full_html(
+                    slide_html,
+                    style,
+                    enhanced_animations=enhanced_animations,
+                )
+                log(f'  [OK] Claude设计系统注入完成 ({style}模板)', 'SUCCESS')
+            except Exception as _e:
+                log_exception("Claude HTML 管道失败，回退通用模式", _e)
+                html = ""
+
+        if not html:
+            # 通用模式(暗色/亮色/卡片/非PPT格式) — 改进版prompt，更多内容
+            if output_format == 'webpage':
+                fmt_instruction = "输出格式：标准网页文章布局，适合阅读。包含导航、内容区、侧边栏或底部推荐。"
+            elif output_format == 'ppt':
+                fmt_instruction = "输出格式：多页PPT幻灯片风格。每页一个主题，支持键盘←→翻页、底部导航点、入场动画。"
+            elif output_format == 'animation':
+                fmt_instruction = "输出格式：动画讲解风格。内容分步骤渐进展示，带滚动触发动画、打字机效果、步骤编号，像一场讲解演出。"
+            elif output_format == 'tech_explainer':
+                fmt_instruction = "输出格式：技术科普动画/知识图解动画风格。核心概念用图解/图表/流程图可视化呈现，复杂原理拆解为分步骤动画，像3Blue1Brown或Kurzgesagt风格的教学叙事。要点：①每个知识点配视觉化图解(SVG/CSS绘画/信息图) ②因果关系用箭头/连线动画展示 ③抽象概念用类比+图示具象化 ④色彩编码区分不同知识模块 ⑤多页分章节+键盘翻页 ⑥数据用动态图表(柱状图/折线图/对比表) ⑦结尾总结知识脉络图。"
+            elif output_format == 'ppt_explainer':
+                fmt_instruction = "输出格式：PPT+科普融合风格。采用PPT幻灯片框架（←→翻页+导航点+进度条），但在每个slide中融入技术科普动画的视觉元素：核心概念配SVG图解/信息图、原理用箭头动画拆解、数据用动态图表呈现。即：外层是PPT翻页结构，内层是图解科普风格，两者有机融合。"
+            elif output_format == 'ai_suggest':
+                fmt_instruction = "输出格式：请AI你先分析视频内容类型（教程/访谈/观点/新闻/Vlog等），在回复开头用一行 <!--FORMAT:xxx--> 说明推荐格式（webpage/ptt/animation/tech_explainer/ppt_explainer），然后生成对应HTML。"
+            else:
+                fmt_instruction = "输出格式：请AI你根据视频内容自动判断最佳呈现方式（教程→PPT、观点→文章、故事→动画等）。"
+
+            content_limit = 15000
+            _ctx = ctx[:content_limit] if len(ctx) > content_limit else ctx
+
+            prompt = f"""你是一个顶级网页设计师和知识萃取师。根据以下B站视频信息生成一个完整的HTML页面(内嵌CSS,响应式)。
+
+    视觉风格要求：{sp}
+    {fmt_instruction}
+
+    设计要求：
+    - CSS必须内嵌在<style>标签中，代码完整可独立运行
+    - 使用现代设计：圆角卡片、柔和阴影、合适的留白和层级
+    - 配色方案专业统一，字体大小有层次（标题→正文→辅助文字）
+    - **禁止使用彩色文字**（红/蓝/绿/紫等），正文只用黑白灰色阶，重点强调使用主题强调色
+    - 支持移动端响应式(@media max-width:768px)
+    - 页面必须包含：视频标题、UP主、内容总结、关键要点/知识点、金句摘录
+    - 只输出完整HTML代码(从<!DOCTYPE html>开始)，不要额外解释
+
+    Video title: {title}
+    UP主: {up_name}
+    Link: {video_url}
+
+    ⚠️ 以下视频数据为真实统计数据，必须在页面中准确展示（如"视频数据概览"卡片），不得编造：
+    - 播放量: {stats.get('view', '??')}
+    - 点赞数: {stats.get('like', '??')}
+    - 投币数: {stats.get('coin', '??')}
+    - 收藏数: {stats.get('favorite', '??')}
+    - 弹幕数: {stats.get('danmaku', '??')}
+    - 评论数: {stats.get('comment', '??')}
+    - 时长: {stats.get('duration', '??')}
+    {'视频简介: ' + (desc or '(无)')[:300] if desc else ''}
+
+    【视频内容（基于字幕/对白）】
+    {_ctx}"""
+            # 详细程度注入（通用模式）
+            _detail_hints_gen = {
+                'brief': "\n\n【详细程度：简短】精简提炼，只保留核心要点和关键信息，省略次要细节。",
+                'medium': "\n\n【详细程度：中长】内容充实但不冗长，每个知识点给出必要说明。",
+                'long': "\n\n【详细程度：很长】深度展开每个知识点，充分论述，包含案例和细节，内容非常详尽。"
             }
-            rich_prompt += _detail_hints.get(detail_level, '')
-            
+            prompt += _detail_hints_gen.get(detail_level, '')
             if page_count:
                 if isinstance(page_count, tuple):
-                    rich_prompt += f"\n\n【页数要求】严格生成 {page_count[0]}~{page_count[1]} 个slide，不要少于{page_count[0]}个，不要超过{page_count[1]}个。"
+                    prompt += f"\n\n页面数量要求：生成 {page_count[0]}~{page_count[1]} 页（幻灯片/章节）。"
                 else:
-                    rich_prompt += f"\n\n【页数要求】严格生成正好 {page_count} 个slide，不多不少。"
-            elif style == 'claude_slides':
-                # 用户未指定页数 → AI自动，但确保不偷懒
-                rich_prompt += "\n\n【内容要求】视频内容很长，请充分展开每个章节，不要省略任何重要知识点。每个slide内容要充实，不是一两句话就带过。"
+                    prompt += f"\n\n页面数量要求：严格生成 {page_count} 页（幻灯片/章节）。"
+            if custom:
+                prompt += f"\n\n用户额外要求: {custom}"
             if slide_frame_custom:
                 if slide_frame_custom == 'n':
-                    rich_prompt += "\n\n【前后固定页】取消默认的封面+数据概览+金句总结固定页模板。所有slide由你自由设计内容结构，不必遵循Slide1封面/Slide2数据/最后页总结的套路。"
+                    prompt += "\n\n【前后固定页】取消默认的封面+数据概览+金句总结固定页模板。自由设计所有页面内容结构。"
                 else:
-                    rich_prompt += f"\n\n【前后固定页自定义】{slide_frame_custom}"
+                    prompt += f"\n\n【前后固定页自定义】{slide_frame_custom}"
             if ppt_explainer_blend:
-                rich_prompt += f"\n\n【PPT+科普融合自定义】{ppt_explainer_blend}"
+                prompt += f"\n\n【PPT+科普融合自定义】{ppt_explainer_blend}"
 
-            resp = await client.chat([{"role":"user","content":rich_prompt}], purpose="html_gen")
-            slide_html = resp.strip()
-            if slide_html.startswith('```'):
-                parts = slide_html.split('```', 2)
-                slide_html = parts[1].strip() if len(parts) > 1 else slide_html
-                if slide_html.lower().startswith('html'):
-                    slide_html = slide_html[4:].strip()
-            # 用完整CSS/JS模板包装（Inter字体+Lucide图标+暖橙配色+亮暗切换+翻页动画）
-            html = build_full_html(
-                slide_html,
-                style,
-                enhanced_animations=enhanced_animations,
-            )
-            print(f"{Fore.GREEN}  [OK] Claude设计系统注入完成 ({style}模板){Style.RESET_ALL}")
-        except Exception as _e:
-            import traceback
-            print(f"{Fore.YELLOW}  [WARN] Claude管道失败: {_e}，回退通用模式{Style.RESET_ALL}")
-            traceback.print_exc()
-            html = ""
+            resp = await client.chat([{"role":"user","content":prompt}], purpose="html_gen")
+            html = resp.strip()
+            if html.startswith('```'):
+                parts = html.split('```', 2)
+                html = parts[1].strip() if len(parts) > 1 else html
+                if html.lower().startswith('html'):
+                    html = html[4:].strip()
 
-    if not html:
-        # 通用模式(暗色/亮色/卡片/非PPT格式) — 改进版prompt，更多内容
-        if output_format == 'webpage':
-            fmt_instruction = "输出格式：标准网页文章布局，适合阅读。包含导航、内容区、侧边栏或底部推荐。"
-        elif output_format == 'ppt':
-            fmt_instruction = "输出格式：多页PPT幻灯片风格。每页一个主题，支持键盘←→翻页、底部导航点、入场动画。"
-        elif output_format == 'animation':
-            fmt_instruction = "输出格式：动画讲解风格。内容分步骤渐进展示，带滚动触发动画、打字机效果、步骤编号，像一场讲解演出。"
-        elif output_format == 'tech_explainer':
-            fmt_instruction = "输出格式：技术科普动画/知识图解动画风格。核心概念用图解/图表/流程图可视化呈现，复杂原理拆解为分步骤动画，像3Blue1Brown或Kurzgesagt风格的教学叙事。要点：①每个知识点配视觉化图解(SVG/CSS绘画/信息图) ②因果关系用箭头/连线动画展示 ③抽象概念用类比+图示具象化 ④色彩编码区分不同知识模块 ⑤多页分章节+键盘翻页 ⑥数据用动态图表(柱状图/折线图/对比表) ⑦结尾总结知识脉络图。"
-        elif output_format == 'ppt_explainer':
-            fmt_instruction = "输出格式：PPT+科普融合风格。采用PPT幻灯片框架（←→翻页+导航点+进度条），但在每个slide中融入技术科普动画的视觉元素：核心概念配SVG图解/信息图、原理用箭头动画拆解、数据用动态图表呈现。即：外层是PPT翻页结构，内层是图解科普风格，两者有机融合。"
-        elif output_format == 'ai_suggest':
-            fmt_instruction = "输出格式：请AI你先分析视频内容类型（教程/访谈/观点/新闻/Vlog等），在回复开头用一行 <!--FORMAT:xxx--> 说明推荐格式（webpage/ptt/animation/tech_explainer/ppt_explainer），然后生成对应HTML。"
-        else:
-            fmt_instruction = "输出格式：请AI你根据视频内容自动判断最佳呈现方式（教程→PPT、观点→文章、故事→动画等）。"
-
-        content_limit = 15000
-        _ctx = ctx[:content_limit] if len(ctx) > content_limit else ctx
-
-        prompt = f"""你是一个顶级网页设计师和知识萃取师。根据以下B站视频信息生成一个完整的HTML页面(内嵌CSS,响应式)。
-
-视觉风格要求：{sp}
-{fmt_instruction}
-
-设计要求：
-- CSS必须内嵌在<style>标签中，代码完整可独立运行
-- 使用现代设计：圆角卡片、柔和阴影、合适的留白和层级
-- 配色方案专业统一，字体大小有层次（标题→正文→辅助文字）
-- **禁止使用彩色文字**（红/蓝/绿/紫等），正文只用黑白灰色阶，重点强调使用主题强调色
-- 支持移动端响应式(@media max-width:768px)
-- 页面必须包含：视频标题、UP主、内容总结、关键要点/知识点、金句摘录
-- 只输出完整HTML代码(从<!DOCTYPE html>开始)，不要额外解释
-
-Video title: {title}
-UP主: {up_name}
-Link: {video_url}
-
-⚠️ 以下视频数据为真实统计数据，必须在页面中准确展示（如"视频数据概览"卡片），不得编造：
-- 播放量: {stats.get('view', '??')}
-- 点赞数: {stats.get('like', '??')}
-- 投币数: {stats.get('coin', '??')}
-- 收藏数: {stats.get('favorite', '??')}
-- 弹幕数: {stats.get('danmaku', '??')}
-- 评论数: {stats.get('comment', '??')}
-- 时长: {stats.get('duration', '??')}
-{'视频简介: ' + (desc or '(无)')[:300] if desc else ''}
-
-【视频内容（基于字幕/对白）】
-{_ctx}"""
-        # 详细程度注入（通用模式）
-        _detail_hints_gen = {
-            'brief': "\n\n【详细程度：简短】精简提炼，只保留核心要点和关键信息，省略次要细节。",
-            'medium': "\n\n【详细程度：中长】内容充实但不冗长，每个知识点给出必要说明。",
-            'long': "\n\n【详细程度：很长】深度展开每个知识点，充分论述，包含案例和细节，内容非常详尽。"
-        }
-        prompt += _detail_hints_gen.get(detail_level, '')
-        if page_count:
-            if isinstance(page_count, tuple):
-                prompt += f"\n\n页面数量要求：生成 {page_count[0]}~{page_count[1]} 页（幻灯片/章节）。"
-            else:
-                prompt += f"\n\n页面数量要求：严格生成 {page_count} 页（幻灯片/章节）。"
-        if custom:
-            prompt += f"\n\n用户额外要求: {custom}"
-        if slide_frame_custom:
-            if slide_frame_custom == 'n':
-                prompt += "\n\n【前后固定页】取消默认的封面+数据概览+金句总结固定页模板。自由设计所有页面内容结构。"
-            else:
-                prompt += f"\n\n【前后固定页自定义】{slide_frame_custom}"
-        if ppt_explainer_blend:
-            prompt += f"\n\n【PPT+科普融合自定义】{ppt_explainer_blend}"
-
-        resp = await client.chat([{"role":"user","content":prompt}], purpose="html_gen")
-        html = resp.strip()
-        if html.startswith('```'):
-            parts = html.split('```', 2)
-            html = parts[1].strip() if len(parts) > 1 else html
-            if html.lower().startswith('html'):
-                html = html[4:].strip()
-
-    # 停止加载动画
-    _spinner_stop.set()
-    await _spinner_task
+    except Exception as exc:
+        log_exception("视频 HTML 生成失败", exc)
+        raise
+    finally:
+        _spinner_stop.set()
+        if _spinner_task is not None:
+            await _spinner_task
 
     # ── 共享后处理：Flask预览 + 保存（两种路径都走这里）──
-    print(f"{Fore.GREEN}[3/3] HTML已生成! 文件大小: {len(html)} 字符{Style.RESET_ALL}")
+    log(f'[3/3] HTML已生成! 文件大小: {len(html)} 字符', 'SUCCESS')
 
     try:
-        # ── Flask 预览（仅交互式 CLI；非交互/AstrBot 环境下不启动本地服务）──
+        # ── Flask 预览（仅独立交互 CLI）──
         if interactive:
             try:
                 from ..services.video_to_ppt import start_preview_server, stop_preview_server
@@ -5814,7 +5851,7 @@ Link: {video_url}
                 preview_url = ""
         else:
             preview_url = ""
-            print(f"{Fore.CYAN}[INFO] 非交互模式，跳过本地预览服务，HTML 已生成{Style.RESET_ALL}")
+            log(f'[INFO] 非交互模式，跳过本地预览服务，HTML 已生成', 'INFO')
         
         # ── AI布局检测/修复（循环迭代，可多轮修复；非交互模式直接跳过）──
         while interactive:
@@ -5918,30 +5955,29 @@ Link: {video_url}
                 print(f"{Fore.YELLOW}无效选项，直接回车跳过{Style.RESET_ALL}")
 
         # ── 询问是否保存 ──
-        print(f"\n{Fore.CYAN}{'─'*50}{Style.RESET_ALL}")
-        print(f"{Fore.CYAN}💾 是否保存此网页？{Style.RESET_ALL}")
-        print(f"{Fore.CYAN}   按 Enter 保存到默认路径 | 输入 n 跳过 | 或输入自定义路径{Style.RESET_ALL}")
+        if interactive:
+            print(f"\n{Fore.CYAN}{'─'*50}{Style.RESET_ALL}")
+            print(f"{Fore.CYAN}💾 是否保存此网页？{Style.RESET_ALL}")
+            print(f"{Fore.CYAN}   按 Enter 保存到默认路径 | 输入 n 跳过 | 或输入自定义路径{Style.RESET_ALL}")
 
-        # 默认保存到项目目录下的 web 文件夹
-        project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-        default_save_dir = os.path.join(project_root, 'web')
-        # 确保 web 目录存在
-        os.makedirs(default_save_dir, exist_ok=True)
+        # 默认保存到当前配置的导出目录，不向只读源码目录写入。
+        default_save_dir = resolve_output_path(None, default=_SHARED_HTML_EXPORTS_DIR)
 
         safe_title = re.sub(r'[\\/*?:"<>|]', '_', title)[:30]
         ts = int(time.time())
         default_filename = f"{safe_title}_{style}_{ts}.html"
 
-        print(f"{Fore.LIGHTBLACK_EX}   默认保存路径: {os.path.join(default_save_dir, default_filename)}{Style.RESET_ALL}")
-        print(f"{Fore.CYAN}   支持: Enter=默认保存 | n=跳过 | 完整路径 | 目录(自动命名){Style.RESET_ALL}")
+        if interactive:
+            print(f"{Fore.LIGHTBLACK_EX}   默认保存路径: {os.path.join(default_save_dir, default_filename)}{Style.RESET_ALL}")
+            print(f"{Fore.CYAN}   支持: Enter=默认保存 | n=跳过 | 完整路径 | 目录(自动命名){Style.RESET_ALL}")
         # 非交互调用（AstrBot）直接保存到默认路径，不询问
         save_input = (input(f"{Fore.GREEN}> {Style.RESET_ALL}").strip() if interactive else "")
 
         if save_input.lower() == 'n':
-            print(f"{Fore.YELLOW}[SKIP] 未保存文件（预览页面仍可访问）{Style.RESET_ALL}")
+            log(f'[SKIP] 未保存文件（预览页面仍可访问）', 'INFO')
         else:
             if save_input:
-                save_path = Path(save_input)
+                save_path = resolve_output_path(save_input)
                 # 如果输入以 / 或 \ 结尾，视为目录，自动生成文件名
                 if save_input.endswith('/') or save_input.endswith('\\'):
                     save_path = save_path / default_filename
@@ -5951,18 +5987,19 @@ Link: {video_url}
                 # else: 完整的 .html 文件路径，直接使用
             else:
                 # Enter 回车 → 使用默认路径
-                save_path = Path(default_save_dir) / default_filename
+                save_path = default_save_dir / default_filename
 
-            # 确保父目录存在
+            # 文件名拼接后再次验证，避免路径分隔符或已有符号链接越界。
+            save_path = resolve_output_path(save_path)
             save_path.parent.mkdir(parents=True, exist_ok=True)
 
             # 如果文件已存在，追加时间戳
             if save_path.exists():
                 ts2 = int(time.time())
-                save_path = save_path.with_name(f"{save_path.stem}_{ts2}{save_path.suffix}")
+                save_path = resolve_output_path(save_path.with_name(f"{save_path.stem}_{ts2}{save_path.suffix}"))
 
             save_path.write_text(html, encoding='utf-8')
-            print(f"{Fore.GREEN}[OK] 已保存到: {save_path.resolve()}{Style.RESET_ALL}")
+            log(f'[OK] 已保存到: {save_path.resolve()}', 'SUCCESS')
 
         # ── 附加导出：Word / PDF / PPT（交互式菜单，非交互模式跳过）──
         if interactive:
@@ -5973,17 +6010,18 @@ Link: {video_url}
 
         # 提示：预览服务器将在程序退出时自动关闭
         if preview_url:
-            print(f"{Fore.LIGHTBLACK_EX}   💡 Flask预览服务器将持续运行 ({preview_url})，退出程序时自动停止{Style.RESET_ALL}")
+            log(f'   💡 Flask预览服务器将持续运行 ({preview_url})，退出程序时自动停止', 'INFO')
 
     except Exception as e:
-        import traceback
-        print(f"{Fore.RED}[ERROR] HTML生成失败: {e}{Style.RESET_ALL}")
-        traceback.print_exc()
+        log_exception("HTML 生成或保存失败", e)
+        if not interactive:
+            raise
         return
     
 
 
 # [knowledge/browse.py] count_knowledge_categories
+@_cli_only
 def show_kb_statistics():
     """显示知识库统计信息"""
     if not os.path.exists(KNOWLEDGE_BASE_DIR):
@@ -6039,6 +6077,7 @@ def show_kb_statistics():
 # [knowledge/browse.py] browse_kb_structure
 # [knowledge/browse.py] search_knowledge_content
 # [knowledge/browse.py] cleanup_duplicates
+@_cli_only
 def show_learning_log():
     """显示学习日志"""
     if not os.path.exists(LEARNING_LOG_FILE):
@@ -6103,6 +6142,15 @@ def _bg_done(tid, ok, result=""):
         if t["id"] == tid: t["status"] = "done" if ok else "failed"; t["result"] = result[:200]; break
 
 def _show_bg_tasks():
+    if _runtime.plugin_mode:
+        if not _bg_tasks:
+            log("没有后台任务", "INFO")
+            return
+        log(f"后台任务 ({len(_bg_tasks)}个)", "INFO")
+        for task in _bg_tasks[-10:]:
+            level = "ERROR" if task["status"] == "failed" else "INFO"
+            log(f"[{task['id']}] {task['time']} {task['type']}: {task['title'][:50]} ({task['status']})", level)
+        return
     if not _bg_tasks:
         print(f"\n{Fore.YELLOW}[INFO] 没有后台任务{Style.RESET_ALL}")
         return
@@ -6127,14 +6175,18 @@ async def _bg_html_gen(tid, bvid, title, up_name, style, custom):
         html = resp.strip()
         if html.startswith("```"): html = html.split("```", 2)[1].strip()
         if html.lower().startswith("html"): html = html[4:].strip()
-        d = str(_SHARED_HTML_EXPORTS_DIR); os.makedirs(d, exist_ok=True)
+        output_dir = resolve_output_path(None, default=_SHARED_HTML_EXPORTS_DIR)
         sf = re.sub(r'[\\/*?:"<>|]', '_', title)[:30]
-        hp = os.path.join(d, f"{sf}_{style}_{tid}.html")
-        with open(hp, 'w') as f: f.write(html)
-        _bg_done(tid, True, f"OK: {os.path.basename(hp)}")
+        hp = resolve_output_path(output_dir / f"{sf}_{style}_{tid}.html")
+        hp.parent.mkdir(parents=True, exist_ok=True)
+        hp.write_text(html, encoding="utf-8")
+        _bg_done(tid, True, f"OK: {hp.name}")
+        log(f"后台 HTML 已保存到 {hp}", "SUCCESS")
     except Exception as e:
-        _bg_done(tid, False, str(e)[:150])
+        log_exception("后台 HTML 生成失败", e)
+        _bg_done(tid, False, type(e).__name__)
 
+@_cli_only
 def show_search_history():
     """显示搜索记录"""
     if not os.path.exists(SEARCH_HISTORY_FILE):
@@ -6158,6 +6210,7 @@ def show_search_history():
         print(f"{Fore.RED}[ERROR] 读取搜索记录失败: {e}{Style.RESET_ALL}")
 
 
+@_cli_only
 def quick_factory_reset_all():
     """R command: erase every private record and generated artifact in one reset."""
     global config
@@ -6220,6 +6273,7 @@ def quick_factory_reset_all():
         print(f"{Fore.YELLOW}[WARN] 未能清除：{' ; '.join(result['failures'])}{Style.RESET_ALL}")
 
 
+@_cli_only
 def factory_reset_all():
     """[LEGACY FACTORY RESET] 按类别逐一询问清除隐私数据，无数据的类别自动跳过"""
     global config
@@ -6507,6 +6561,7 @@ def factory_reset_all():
     input(f"\n{Fore.CYAN}按回车继续...{Style.RESET_ALL}")
 
 
+@_cli_only
 def export_config():
     """[EXPORT] 一键导出所有配置/状态到备份目录，与项目文件分离"""
     print(f"\n{Fore.CYAN}════════════════════════════════════════════════{Style.RESET_ALL}")
@@ -6709,6 +6764,7 @@ def export_config():
     input(f"\n{Fore.CYAN}按回车继续...{Style.RESET_ALL}")
 
 
+@_cli_only
 def import_config():
     """[IMPORT] 一键从备份目录恢复所有配置/状态/登录数据"""
     global config
@@ -6843,6 +6899,7 @@ def import_config():
 # ═══════════════════════════════════════════════════════════════
 # 🛋️ 待机模式设置 (Standby Mode Config)
 # ═══════════════════════════════════════════════════════════════
+@_cli_only
 def _configure_standby_settings():
     """待机模式完整设置：ASR/总结/评论区/PPT/视频触发 等全部选项"""
     from ..brain.standby import load_standby_config, save_standby_config, load_stats
@@ -7214,7 +7271,7 @@ def _reload_all_globals(new_config: dict):
     VIDEO_MAX_DURATION_SECONDS = vid.get("max_duration_seconds", 900)
     VIDEO_FRAME_COUNT = vid.get("frame_count", 12)
     VIDEO_DOWNLOAD_INTEREST_THRESHOLD = vid.get("download_interest_threshold", 7.0)
-    VIDEO_DOWNLOAD_DIR = vid.get("download_dir", "")
+    VIDEO_DOWNLOAD_DIR = str(resolve_output_path(vid.get("download_dir"), default=CACHE_DIR / "videos"))
     VIDEO_DELETE_AFTER_UNDERSTAND = vid.get("delete_video_after_understand", True)
     VIDEO_FILTER_MODE = vid.get("filter_mode", "cover_and_title")
     VIDEO_QUALITY = vid.get("quality", "best")

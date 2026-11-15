@@ -1,5 +1,6 @@
 """brain/_brain_history.py — AgentBrain 互动视频历史 & 回顾复习 mixin"""
 from ._mixin_imports import *
+from ..utils.display import log_exception
 
 class BrainHistoryMixin:
     """互动视频历史 & 回顾复习"""
@@ -12,7 +13,7 @@ class BrainHistoryMixin:
                     data.setdefault("videos", [])
                     return data
             except (OSError, json.JSONDecodeError) as e:
-                log(f'加载JSON文件失败: {e}', 'DEBUG')
+                log_exception("加载视频历史失败", e)
         return {"videos": []}
 
     def _save_history_videos(self):
@@ -22,7 +23,7 @@ class BrainHistoryMixin:
                 json.dump(self.history_videos, f, ensure_ascii=False, indent=2)
             os.replace(tmp, HISTORY_VIDEOS_FILE)
         except OSError as e:
-            log(f'文件操作失败: {e}', 'DEBUG')
+            log_exception("保存视频历史失败", e)
 
     def add_history_video(self, bvid, title, up, aid, action, score=0, pic=""):
         if score < REVISIT_MIN_SCORE:

@@ -1,5 +1,6 @@
 """brain/_brain_journal.py — AgentBrain prompt构建 & 日记 & 事件记录 mixin"""
 from ._mixin_imports import *
+from ..utils.display import log_exception
 
 class BrainJournalMixin:
     """Prompt构建、日记、事件记录、学习日志"""
@@ -40,7 +41,7 @@ class BrainJournalMixin:
                 f.write(entry)
             log("日常日记已记录", "NOTE")
         except OSError as e:
-            log(f'文件操作失败: {e}', 'DEBUG')
+            log_exception("记录日记失败", e)
 
     def record_session_event(self, event_type, **payload):
         item = {
@@ -63,4 +64,4 @@ class BrainJournalMixin:
                 f.write(entry)
             log("学习日志已记录", "LEARN")
         except Exception as e:
-            log(f"记录学习日志失败: {e}", "ERROR")
+            log_exception("记录学习日志失败", e)
