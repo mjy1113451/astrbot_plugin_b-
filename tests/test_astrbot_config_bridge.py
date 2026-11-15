@@ -362,6 +362,25 @@ class AstrBotConfigBridgeTests(unittest.TestCase):
         self.assertEqual(self.cfg.config, self.initial)
         self.assertEqual(self.path.read_bytes(), corrupt_bytes)
 
+    def test_non_object_json_config_fails_closed_without_changing_disk_or_memory(self):
+        for value in (["CONFIG_CONTENT_CANARY"], "CONFIG_CONTENT_CANARY", None):
+            with self.subTest(type=type(value).__name__):
+                self.path.write_text(json.dumps(value), encoding="utf-8")
+                before = self.path.read_bytes()
+                with self.assertRaises(ValueError) as caught:
+                    self.cfg.load_config()
+                self.assertIn(str(self.path), str(caught.exception))
+                self.assertNotIn("CONFIG_CONTENT_CANARY", str(caught.exception))
+                for panel in ({"use_astrbot_config": False},
+                              {"use_astrbot_config": True, "apply_sections": []},
+                              {"use_astrbot_config": True, "apply_sections": ["api"],
+                               "api": {"model_brain": "panel"}}):
+                    with self.assertRaises(ValueError):
+                        self.bridge.apply_astrbot_config(panel)
+                self.assertEqual(self.path.read_bytes(), before)
+                self.assertEqual(self.cfg.config, self.initial)
+                self.assertIs(self.cfg.config, self.config_reference)
+
     def test_broken_schema_does_not_change_memory_or_disk(self):
         schema_path = Path(self.temp.name) / "bad-schema.json"
         schema_path.write_text("{invalid", encoding="utf-8")

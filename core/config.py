@@ -569,6 +569,8 @@ def load_config():
         try:
             with path.open('r', encoding='utf-8') as f:
                 cfg = json.load(f)
+            if not isinstance(cfg, dict):
+                raise ValueError(f"业务配置文件顶层必须是 JSON 对象: {path}")
             cfg = normalize_config(cfg)
             # 清洗脱敏占位符：'[已隐藏]' 视为未配置（避免被当真实 key 使用）
             _api = cfg.setdefault("api", {})

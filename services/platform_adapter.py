@@ -197,6 +197,35 @@ def fetch_platform_metadata(
     }
 
 
+def _downloaded_file_path(ydl, info: dict[str, Any], out_dir: Path) -> Path:
+    """Use downloader-reported final paths before falling back to its template."""
+    records = [info]
+    requested = info.get("requested_downloads")
+    if isinstance(requested, (list, tuple)):
+        records.extend(item for item in requested if isinstance(item, dict))
+
+    def existing_path(value):
+        if not isinstance(value, (str, os.PathLike)) or not str(value):
+            return None
+        path = Path(value)
+        path = resolve_output_path(path if path.is_absolute() else out_dir / path)
+        if not path.is_relative_to(out_dir):
+            raise ValueError("Downloaded file must remain inside its output directory")
+        return path if path.is_file() else None
+
+    # requested_downloads can contain a postprocessed filepath while top-level
+    # filename/_filename still names the pre-processing input.
+    for field in ("filepath", "filename", "_filename"):
+        for record in records:
+            path = existing_path(record.get(field))
+            if path is not None:
+                return path
+    path = existing_path(ydl.prepare_filename(info))
+    if path is None:
+        raise FileNotFoundError("Downloader did not produce an accessible output file")
+    return path
+
+
 def download_platform_video(
     value: str, cfg: dict[str, Any] | None = None
 ) -> tuple[str | None, float, float, dict[str, Any]]:
@@ -229,10 +258,12 @@ def download_platform_video(
             ydl_opts["proxy"] = proxy
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
             info = ydl.extract_info(value, download=True)
+            if not isinstance(info, dict):
+                raise ValueError("Downloader metadata must be an object")
             video_id = info.get("id")
             title = info.get("title")
             duration = info.get("duration", 0)
-            audio_path = str(out_dir / f"{video_id}.{info.get('ext', 'm4a')}")
+            audio_path = str(_downloaded_file_path(ydl, info, out_dir))
             return audio_path, float(duration), 0.0, {"video_id": video_id, "title": title}
     except Exception as exc:
         return None, 0.0, 0.0, {"error": f"Video download failed ({type(exc).__name__})"}

@@ -334,6 +334,20 @@ class UserDataTests(unittest.TestCase):
         self.assertEqual(storage.get_backup_dir(), data.BACKUPS_DIR)
         self.assertFalse(data.BACKUPS_DIR.exists())
 
+    def test_initial_config_import_rejects_non_object_json_without_rewriting(self):
+        for value in (["CONFIG_CONTENT_CANARY"], "CONFIG_CONTENT_CANARY", None):
+            with self.subTest(type=type(value).__name__):
+                name, _, data = self.load()
+                config_file = self.write(data.DATA_DIR / "config.json", json.dumps(value))
+                before = config_file.read_bytes()
+                with self.assertRaises(ValueError) as caught:
+                    self.load_config(name)
+                self.assertIn(str(config_file), str(caught.exception))
+                self.assertNotIn("CONFIG_CONTENT_CANARY", str(caught.exception))
+                self.assertEqual(config_file.read_bytes(), before)
+                self.assertNotIn(name + ".core.config", sys.modules)
+                self.assertEqual(list(data.DATA_DIR.glob(".private-*.tmp")), [])
+
     def test_config_knowledge_paths_use_root_and_validate_before_save(self):
         name, _, data = self.load()
         cfg = self.load_config(name)

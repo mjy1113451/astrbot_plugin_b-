@@ -99,6 +99,10 @@ class FakeDownloads:
         self.constructor_error = None
         self.exit_error = None
         self.emit_diagnostics = False
+        self.create_output = True
+        self.output_path = None
+        self.prepared_path = None
+        self.include_final_path = True
         self.closed = threading.Event()
 
     def open(self, options):
@@ -137,7 +141,20 @@ class FakeDownloader:
         effect = self.owner.effects.pop(0)
         if isinstance(effect, BaseException):
             raise effect
-        return effect() if callable(effect) else effect
+        info = effect() if callable(effect) else effect
+        if self.owner.create_output:
+            path = Path(self.owner.output_path or self.prepare_filename(info))
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_bytes(b"synthetic media")
+            if self.owner.include_final_path:
+                info = {**info, "filepath": str(path)}
+        return info
+
+    def prepare_filename(self, info):
+        if self.owner.prepared_path is not None:
+            return str(self.owner.prepared_path)
+        return self.options["outtmpl"].replace("%(id)s", str(info.get("id", "NA"))).replace(
+            "%(ext)s", str(info.get("ext", "NA")))
 
 
 class ThreadGate:
@@ -471,13 +488,16 @@ class AsyncPlatformTests(unittest.IsolatedAsyncioTestCase):
                                       wraps=self.adapter.resolve_output_path) as resolve:
                         result = await self.invoke("download_platform_video", "https://video.invalid/id", cfg,
                                                    asynchronous=asynchronous)
-                        resolve.assert_called_once_with(((cfg or {}).get("video") or {}).get("download_dir"),
-                                                        self.user_data.DATA_DIR / "downloads")
+                        self.assertEqual(resolve.call_args_list[0], unittest.mock.call(
+                            ((cfg or {}).get("video") or {}).get("download_dir"),
+                            self.user_data.DATA_DIR / "downloads"))
                     self.assertEqual(result, (str(directory / "synthetic-id.m4a"), 12.5, 0.0,
                                               {"video_id": "synthetic-id", "title": "Synthetic title"}))
                     self.assertIs(type(result[1]), float)
                     self.assertIs(type(result[2]), float)
                     self.assertTrue(directory.is_dir())
+                    self.assertTrue(Path(result[0]).is_file())
+                    self.assertEqual(Path(result[0]).read_bytes(), b"synthetic media")
                     options = self.downloads.options[-1]
                     self.assertEqual(Path(options["outtmpl"]), directory / "%(id)s.%(ext)s")
                     self.assertTrue(math.isfinite(options["socket_timeout"]))
@@ -525,12 +545,88 @@ class AsyncPlatformTests(unittest.IsolatedAsyncioTestCase):
         self.assertFalse(self.profile.exists())
         self.assertEqual(self.http.calls, [])
 
-    async def test_download_default_duration_and_extension_contract(self):
+    async def test_download_missing_extension_uses_reported_file_not_assumed_m4a(self):
+        actual = self.profile / "Data" / "downloads" / "actual.webm"
+        self.downloads.output_path = actual
         self.downloads.effects = [{"id": "synthetic-id", "title": "Synthetic title"}]
         self.assertEqual(await self.adapter.download_platform_video_async("https://video.invalid/id"),
-                         (str(self.profile / "Data" / "downloads" / "synthetic-id.m4a"),
-                          0.0, 0.0, {"video_id": "synthetic-id", "title": "Synthetic title"}))
+                         (str(actual), 0.0, 0.0, {"video_id": "synthetic-id", "title": "Synthetic title"}))
+        self.assertTrue(Path(actual).is_file())
         self.assertTrue(self.downloads.clients[-1].closed)
+
+    async def test_download_uses_actual_file_when_id_and_extension_are_different(self):
+        actual = self.profile / "Data" / "downloads" / "sanitized-id.webm"
+        self.downloads.output_path = actual
+        self.downloads.effects = [{**INFO, "id": "unsafe:id", "ext": "m4a"}]
+        result = await self.adapter.download_platform_video_async("https://video.invalid/id")
+        self.assertEqual(result[0], str(actual))
+        self.assertTrue(Path(result[0]).is_file())
+        self.assertEqual(result[3]["video_id"], "unsafe:id")
+        self.assertTrue(self.downloads.clients[-1].closed)
+
+    async def test_download_prefers_final_requested_path_over_stale_top_level_filename(self):
+        directory = self.profile / "Data" / "downloads"
+        actual = directory / "final.opus"
+        stale = directory / "before-processing.m4a"
+        stale.parent.mkdir(parents=True)
+        stale.write_bytes(b"stale intermediate media")
+        self.downloads.output_path = actual
+        self.downloads.include_final_path = False
+        self.downloads.effects = [{**INFO, "_filename": str(stale), "filename": str(stale),
+                                   "requested_downloads": [{"filepath": str(actual)}]}]
+        result = await self.adapter.download_platform_video_async("https://video.invalid/id")
+        self.assertEqual(result[0], str(actual))
+        self.assertTrue(Path(result[0]).is_file())
+        self.assertEqual(stale.read_bytes(), b"stale intermediate media")
+
+    async def test_download_uses_reported_filename_and_template_fallback(self):
+        directory = self.profile / "Data" / "downloads"
+        for field in ("filename", "_filename", "prepared"):
+            with self.subTest(field=field):
+                actual = directory / f"sanitized-{field}.webm"
+                self.downloads.output_path = actual
+                self.downloads.prepared_path = actual if field == "prepared" else directory / "wrong-template.m4a"
+                self.downloads.include_final_path = False
+                info = INFO.copy()
+                if field != "prepared":
+                    info[field] = str(actual)
+                self.downloads.effects = [info]
+                result = await self.adapter.download_platform_video_async("https://video.invalid/id")
+                self.assertEqual(result[0], str(actual))
+                self.assertTrue(Path(result[0]).is_file())
+
+    async def test_download_without_a_real_output_returns_failure_not_a_guessed_path(self):
+        self.downloads.create_output = False
+        self.downloads.effects = [{**INFO, "filepath": str(self.profile / "Data" / "downloads" / "missing.webm")}]
+        result = await self.adapter.download_platform_video_async("https://video.invalid/id")
+        self.assert_safe_error(result, "FileNotFoundError")
+        self.assertTrue(self.downloads.clients[-1].closed)
+
+    async def test_download_rejects_reported_paths_outside_configured_output(self):
+        self.downloads.create_output = False
+        for actual in (self.temp / "outside.webm", self.profile / "other" / "outside.webm"):
+            actual.parent.mkdir(parents=True, exist_ok=True)
+            actual.write_bytes(b"do not return foreign media")
+            self.downloads.effects = [{**INFO, "filepath": str(actual)}]
+            result = await self.adapter.download_platform_video_async("https://video.invalid/id")
+            self.assert_safe_error(result, "ValueError")
+            self.assertEqual(actual.read_bytes(), b"do not return foreign media")
+
+    async def test_download_rejects_final_output_symlink_escape(self):
+        directory = self.profile / "Data" / "downloads"
+        directory.mkdir(parents=True)
+        outside = self.temp / "foreign.webm"
+        outside.write_bytes(b"foreign")
+        link = directory / "reported.webm"
+        try:
+            link.symlink_to(outside)
+        except (OSError, NotImplementedError) as exc:
+            self.skipTest(f"Symlinks unavailable: {exc}")
+        self.downloads.create_output = False
+        self.downloads.effects = [{**INFO, "filepath": str(link)}]
+        result = await self.adapter.download_platform_video_async("https://video.invalid/id")
+        self.assert_safe_error(result, "ValueError")
+        self.assertEqual(outside.read_bytes(), b"foreign")
 
     async def test_download_proxy_configuration_failures_keep_safe_tuple(self):
         class BrokenProxy(dict):
