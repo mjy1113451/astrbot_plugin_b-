@@ -59,6 +59,26 @@ class ImportContractTests(unittest.TestCase):
                     if isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute):
                         self.assertNotIn(node.func.attr, {"getLogger", "basicConfig", "setLevel"})
 
+    def test_config_and_cli_have_no_eager_filesystem_or_terminal_initialization(self):
+        forbidden = {"mkdir", "makedirs", "write_text", "write_bytes", "write_private_json",
+                     "save_config", "ensure_user_data_dir", "initialize_config", "initialize_cli",
+                     "_initialize_cli_terminal"}
+
+        def eager_calls(node):
+            if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef, ast.Lambda)):
+                return
+            if isinstance(node, ast.Call):
+                yield node
+            for child in ast.iter_child_nodes(node):
+                yield from eager_calls(child)
+
+        for relative in ("core/config.py", "cli/app.py"):
+            source = ast.parse((ROOT / relative).read_text(encoding="utf-8"))
+            for call in eager_calls(source):
+                name = getattr(call.func, "id", getattr(call.func, "attr", ""))
+                with self.subTest(file=relative, line=call.lineno):
+                    self.assertNotIn(name, forbidden)
+
     def test_required_tools_are_included(self):
         for name in ("display", "helpers", "lock", "storage", "subtitles",
                      "desktop_notifications", "web_launcher"):

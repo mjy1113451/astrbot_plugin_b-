@@ -29,6 +29,33 @@ class RuntimeEntryTests(unittest.IsolatedAsyncioTestCase):
                     self.assertIn("CLI" if name in ("kb_revisit", "kb_organize") else "终端", replies[0])
         self.environment.assert_isolated(self)
 
+    async def test_empty_business_commands_never_initialize_or_import_business(self):
+        bot = self.environment.construct_bot(self.main)
+        event = SimpleNamespace(plain_result=lambda text: text)
+        for name in ("analyze_video", "up_learn", "video_to_html"):
+            with self.subTest(command=name):
+                replies = [reply async for reply in getattr(bot, name)(event)]
+                self.assertEqual(len(replies), 1)
+                self.assertIn("用法", replies[0])
+        self.environment.assert_isolated(self)
+
+    async def test_noninteractive_jobs_stop_when_profile_initialization_fails(self):
+        bot = self.environment.construct_bot(self.main)
+        runtime = self.environment.install_runtime(PACKAGE_A)
+        runtime.config.initialize_config.side_effect = ValueError("PRIVATE_CONFIG_CANARY")
+        event = SimpleNamespace(plain_result=lambda text: text)
+        for name, value in (("analyze_video", "BV1Q541167Qg"), ("up_learn", "1"),
+                            ("video_to_html", "BV1Q541167Qg")):
+            with self.subTest(command=name):
+                replies = [reply async for reply in getattr(bot, name)(event, value)]
+                self.assertEqual(len(replies), 1)
+                self.assertIn("失败", replies[0])
+                self.assertNotIn("PRIVATE_CONFIG_CANARY", replies[0])
+        self.assertEqual(runtime.config.initialize_config.call_count, 3)
+        runtime.brain.AgentBrain.assert_not_called()
+        self.assertIsNone(self.main._brain_task)
+        self.environment.assert_isolated(self)
+
     def test_host_data_api_failure_does_not_fall_back_or_import_business(self):
         self.environment.star_tools.get_data_dir.side_effect = OSError("host root unavailable")
         with self.assertRaises(OSError):
@@ -87,12 +114,15 @@ class RuntimeEntryTests(unittest.IsolatedAsyncioTestCase):
         data.migrate_legacy_data = Mock(return_value=["copied"])
         app = sys.modules[prefix + ".cli.app"]
         app.show_main_menu = Mock()
+        # This scenario begins before any business config is imported; the shared
+        # startup fixture also supports brain tests that explicitly initialize it.
+        sys.modules.pop(prefix + ".core.config", None)
         with patch.dict(sys.modules, {data.__name__: data}), \
                 patch.object(sys, "argv", ["main.py", "--migrate-data", "explicit-source"]):
             namespace["run_cli"]()
         data.migrate_legacy_data.assert_called_once_with("explicit-source")
         app.show_main_menu.assert_not_called()
-        self.assertNotIn(prefix + ".core.config", sys.modules)
+        self.assertFalse(prefix + ".core.config" in sys.modules)
         self.environment.star_tools.get_data_dir.assert_not_called()
 
     def test_migration_failure_exits_nonzero_without_opening_menu(self):

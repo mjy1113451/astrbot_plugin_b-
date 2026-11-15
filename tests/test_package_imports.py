@@ -138,6 +138,7 @@ class _PackageEnvironment:
         self.foreign_cli._release_bot_lock = Mock()
         self.foreign_config = self.install(_module("core.config"))
         self.foreign_config.config = {"owner": "foreign-core"}
+        self.foreign_config.initialize_config = Mock()
         self.foreign_bridge = self.install(_module("core.astrbot_config_bridge"))
         self.foreign_bridge.apply_astrbot_config = Mock()
         self.foreign_display = self.install(_module("utils.display"))
@@ -193,7 +194,9 @@ class _PackageEnvironment:
             self.install_package(package, "core")
             bridge = self.install(_module(package + ".core.astrbot_config_bridge"))
             bridge.apply_astrbot_config = Mock()
-        return SimpleNamespace(app=app, brain=brain, bridge=bridge,
+        config = self.install(_module(package + ".core.config"))
+        config.initialize_config = Mock()
+        return SimpleNamespace(app=app, brain=brain, bridge=bridge, config=config,
                                display=display, finished=finished)
 
     def load_real_bridge(self, package):
@@ -242,6 +245,7 @@ class _PackageEnvironment:
         test.assertEqual(self.foreign_cli.config, self.foreign_cli_config)
         test.assertEqual(self.foreign_config.config, self.foreign_core_config)
         self.foreign_cli._release_bot_lock.assert_not_called()
+        self.foreign_config.initialize_config.assert_not_called()
         self.foreign_bridge.apply_astrbot_config.assert_not_called()
         self.foreign_display.log.assert_not_called()
         self.foreign_display.log_exception.assert_not_called()
@@ -429,8 +433,13 @@ class PackageStartBotTests(_PackageTestMixin, unittest.IsolatedAsyncioTestCase):
             with self.subTest(package=package):
                 main = self.environment.load_main(package)
                 runtime = self.environment.install_runtime(package, with_bridge=False)
+                calls = Mock()
+                calls.attach_mock(runtime.config.initialize_config, "initialize")
+                calls.attach_mock(runtime.brain.AgentBrain, "brain")
                 tasks.append(await self.start(main))
+                runtime.config.initialize_config.assert_called_once_with()
                 runtime.brain.AgentBrain.assert_called_once_with()
+                self.assertEqual(calls.mock_calls, [call.initialize(), call.brain()])
                 self.assertNotIn(package + ".core.astrbot_config_bridge", sys.modules)
                 self.assertNotIn(package + ".core", sys.modules)
                 self.environment.assert_isolated(self)
@@ -448,6 +457,53 @@ class PackageStartBotTests(_PackageTestMixin, unittest.IsolatedAsyncioTestCase):
                 await self.start(main, panel)
                 self.assertEqual(calls.mock_calls, [call.apply(panel), call.brain()])
                 self.assertIs(runtime.bridge.apply_astrbot_config.call_args.args[0], panel)
+                self.environment.assert_isolated(self)
+
+    async def test_initialization_precedes_bridge_and_brain_imports(self):
+        for package in PACKAGES:
+            with self.subTest(package=package):
+                main = self.environment.load_main(package)
+                runtime = self.environment.install_runtime(package)
+                panel = {"use_astrbot_config": True}
+                imports = []
+
+                def import_after_initialization(name, globals=None, locals=None,
+                                                fromlist=(), level=0):
+                    if level == 1 and name in (
+                        "core.astrbot_config_bridge", "brain.agent_brain"
+                    ):
+                        runtime.config.initialize_config.assert_called_once_with()
+                        imports.append(name)
+                    return self.environment.guarded_import(name, globals, locals, fromlist, level)
+
+                with patch("builtins.__import__", new=import_after_initialization):
+                    await self.start(main, panel)
+                runtime.config.initialize_config.assert_called_once_with()
+                self.assertEqual(imports, ["core.astrbot_config_bridge", "brain.agent_brain"])
+                runtime.bridge.apply_astrbot_config.assert_called_once_with(panel)
+                runtime.brain.AgentBrain.assert_called_once_with()
+                self.environment.assert_isolated(self)
+
+    async def test_initialization_failure_does_not_import_bridge_or_create_brain(self):
+        for package in PACKAGES:
+            with self.subTest(package=package):
+                main = self.environment.load_main(package)
+                runtime = self.environment.install_runtime(package)
+                runtime.config.initialize_config.side_effect = OSError("fixture initialization failed")
+                event = SimpleNamespace(plain_result=lambda text: text)
+                bot = self.environment.construct_bot(main, {"use_astrbot_config": True})
+                with patch("builtins.__import__", wraps=self.environment.guarded_import) as imports:
+                    replies = [reply async for reply in bot.start_bot(event)]
+                self.assertEqual(len(replies), 1)
+                self.assertIn("初始化失败", replies[0])
+                runtime.config.initialize_config.assert_called_once_with()
+                imported = [item.args[0] for item in imports.call_args_list]
+                self.assertNotIn("core.astrbot_config_bridge", imported)
+                self.assertNotIn("brain.agent_brain", imported)
+                runtime.bridge.apply_astrbot_config.assert_not_called()
+                runtime.brain.AgentBrain.assert_not_called()
+                runtime.app._release_bot_lock.assert_not_called()
+                self.assertIsNone(main._brain_task)
                 self.environment.assert_isolated(self)
 
     async def test_bridge_failure_does_not_create_a_brain_or_background_task(self):

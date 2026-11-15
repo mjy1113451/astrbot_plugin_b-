@@ -101,6 +101,7 @@ def apply_astrbot_config(values):
 
 
 def _sync_loaded_config(shared, updated):
+    updated = deepcopy(updated)
     shared.config.clear()
     shared.config.update(updated)
     app = sys.modules.get(f"{__package__.rsplit('.', 1)[0]}.cli.app")

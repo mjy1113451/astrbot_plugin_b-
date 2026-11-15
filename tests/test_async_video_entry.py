@@ -125,6 +125,34 @@ class AsyncVideoEntryTests(unittest.IsolatedAsyncioTestCase):
                  and isinstance(node.value, ast.Call) and isinstance(node.value.func, ast.Name)}
         self.assertFalse(guarded & calls, f"Import-time CLI-only calls: {guarded & calls}")
         self.assertIn("configure_openai_client", calls)
+        self.assertNotIn("_initialize_cli_terminal", calls)
+        self.assertNotIn("initialize_cli", calls)
+        menu = next(node for node in tree.body if isinstance(node, ast.FunctionDef) and node.name == "show_main_menu")
+        self.assertIsInstance(menu.body[1], ast.Expr)
+        self.assertIsInstance(menu.body[1].value, ast.Call)
+        self.assertEqual(menu.body[1].value.func.id, "initialize_cli")
+
+    def test_cli_initialization_updates_existing_reference_after_shared_success(self):
+        reference = {"api": {"model_brain": "before"}}
+        updated = {"api": {"model_brain": "after"}}
+        shared = SimpleNamespace(initialize_config=Mock(return_value=updated))
+        reload_config, terminal = Mock(), Mock()
+        self.namespace.update(config=reference, _run_with_shared_config_path=lambda operation: operation(shared),
+                              _reload_all_globals=reload_config, _initialize_cli_terminal=terminal)
+        initialize = extract("cli/app.py", "initialize_cli", self.namespace)
+        initialize()
+        self.assertIs(self.namespace["config"], reference)
+        self.assertEqual(reference, updated)
+        reload_config.assert_called_once_with(reference)
+        terminal.assert_called_once_with()
+        shared.initialize_config.side_effect = OSError("controlled initialization failure")
+        reload_config.reset_mock()
+        terminal.reset_mock()
+        with self.assertRaises(OSError):
+            initialize()
+        self.assertEqual(reference, updated)
+        reload_config.assert_not_called()
+        terminal.assert_not_called()
 
     async def test_plugin_up_entry_requires_explicit_parameters_without_input(self):
         fn = extract("brain/video_analysis.py", "up_homepage_learn", self.namespace)

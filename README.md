@@ -129,6 +129,8 @@ git clone https://github.com/mjy1113451/astrbot_plugin_b-.git
 
 相对输出路径均基于数据根，保留子目录；插件模式拒绝根目录之外的绝对路径、`..` 和链接越界。安装目录仅用于读取代码及资源，不再保存生成产物。
 
+导入 `core.config` / `cli.app` 只读取已有配置，配置缺失时仅生成内存默认值，不创建用户目录、默认配置或密钥。插件在显式启动学习/分析任务时调用 `initialize_config()`，独立 CLI 在进入主菜单时调用 `initialize_cli()`，才创建所需目录与缺失配置；读取已有配置不会覆盖它。终端编码和 colorama 初始化也只在运行 CLI 时执行，不在导入时修改输出流。嵌入调用者需要持久化初始配置时应显式调用 `core.config.initialize_config()`。
+
 **独立 CLI 模式**仍使用 `%LOCALAPPDATA%\BiliLearn`（非 Windows 默认 `~/AppData/Local/BiliLearn`），也可通过 `BILI_USER_DATA_DIR` 明确选择数据根；仅此模式允许显式指定外部绝对导出路径。如需用 CLI 管理插件同一份数据，应先停止插件任务，再将该变量设为插件数据根。终端菜单不会通过聊天指令调用，即使宿主连接着终端也不会默认确认操作。
 
 ### 旧数据迁移与备份
@@ -200,6 +202,17 @@ python -m pip install -r requirements-dev.txt
 python -m unittest discover -s tests -v
 ```
 
+安装完整业务依赖后，可额外运行真实导入冒烟测试（使用临时 profile、假 AstrBot，禁止对外网络及导入阶段写入）：
+
+```bash
+python -B tests/smoke_runtime_imports.py plugin missing
+python -B tests/smoke_runtime_imports.py plugin existing
+python -B tests/smoke_runtime_imports.py standalone missing
+python -B tests/smoke_runtime_imports.py standalone existing
+```
+
+此冒烟脚本不由仅测试依赖的 unittest 自动发现；它还验证显式初始化能正常创建所选 profile，并保持已导入的配置字典引用。
+
 ---
 
 ## FAQ / 排障
@@ -252,6 +265,7 @@ API Key、Cookie 等凭据仅保存在本地，请勿公开分享。
 - Version is defined in `metadata.yaml` (`version`) and mirrored by `PLUGIN_VERSION` in `main.py`; MIT license, requires AstrBot `>=4.29.1,<5`.
 - Commands: `/bili_start`, `/bili_stop`, `/bili_status`, `/bili_analyze`, `/bili_up_learn`, `/bili_video2html`, `/bili_kb_*`, `/bili_asr`, `/bili_quiet`, `/bili_vision`, `/bili_fast`, `/bili_interest`, `/bili_comment`, `/bili_export`, `/bili_import`, `/bili_reset`, `/bili_login`.
 - In plugin mode, all private data and generated artifacts live below AstrBot's `data/plugin_data/astrbot_plugin_bilibili_learning_bot/`, obtained via `StarTools`; global `BILI_USER_DATA_DIR` is ignored. Standalone CLI keeps its own `%LOCALAPPDATA%\BiliLearn` profile (or explicit `BILI_USER_DATA_DIR`). Relative export paths stay inside that profile.
+- Importing `core.config` / `cli.app` is read-only: missing profiles use in-memory defaults without creating directories, config files or cipher keys. Plugin learning/analysis commands explicitly initialize their profile; standalone CLI initializes at menu startup. Embedding callers can invoke `core.config.initialize_config()` explicitly. Terminal setup also runs only when the CLI is used, not when imported.
 - Legacy data is never discovered or imported automatically. Before initializing a new target, stop all workers, back up both locations, explicitly set `BILI_USER_DATA_DIR` to the target and run `python main.py --migrate-data /absolute/legacy/root`. Only allowlisted data is copied, without overwriting, following links or deleting the source. An existing account/config/key in the target rejects the migration; do not merge unrelated credentials.
 - Plugin diagnostics use AstrBot's logger without terminal animation, interactive menus or browser/preview-server startup. AI calls are asynchronous; short-link and download operations run in threads with finite I/O timeouts/retries. Cancelling their await does not terminate an already-running thread or enforce a hard total deadline.
 - Plugin panel settings take effect only when `use_astrbot_config` is enabled and the relevant groups are listed in `apply_sections`.

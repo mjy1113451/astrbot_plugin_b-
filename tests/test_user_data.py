@@ -147,6 +147,7 @@ class UserDataTests(unittest.TestCase):
     def test_config_and_key_reject_final_links_without_importing_foreign_profile(self):
         name, _, data = self.load()
         cfg = self.load_config(name)
+        cfg.initialize_config()
         config_path = Path(cfg.CONFIG_FILE)
         config_path.unlink()
         outside = self.write(self.temp / "foreign-config.json", '{"api": {"unified_api_key": "foreign"}}')
@@ -334,6 +335,78 @@ class UserDataTests(unittest.TestCase):
         self.assertEqual(storage.get_backup_dir(), data.BACKUPS_DIR)
         self.assertFalse(data.BACKUPS_DIR.exists())
 
+    def test_config_import_and_load_are_read_only_for_plugin_and_standalone(self):
+        for plugin in (True, False):
+            with self.subTest(plugin=plugin):
+                name, _, data = self.load(plugin=plugin, root=self.temp / f"readonly-{plugin}")
+                with patch.object(Path, "mkdir", side_effect=AssertionError("import created directories")), \
+                        patch("os.makedirs", side_effect=AssertionError("import created directories")), \
+                        patch.object(data, "write_private_json", side_effect=AssertionError("import wrote config")):
+                    cfg = self.load_config(name)
+                    first = cfg.load_config()
+                    second = cfg.load_config()
+                self.assertFalse(data.USER_DATA_DIR.exists())
+                self.assertIsNot(first, second)
+                self.assertIsNot(first["api"], second["api"])
+                first["api"]["model_brain"] = "local-change"
+                self.assertNotEqual(second["api"]["model_brain"], "local-change")
+                self.assertNotEqual(cfg.DEFAULT_CONFIG["api"]["model_brain"], "local-change")
+
+    def test_explicit_initialization_creates_profile_once_and_preserves_shared_references(self):
+        name, _, data = self.load()
+        cfg = self.load_config(name)
+        self.assertFalse(data.USER_DATA_DIR.exists())
+        reference = cfg.config
+        initialized = cfg.initialize_config()
+        self.assertIs(initialized, reference)
+        self.assertIs(cfg.config, reference)
+        self.assertTrue(Path(cfg.CONFIG_FILE).is_file())
+        self.assertTrue(data.KNOWLEDGE_BASE_DIR.is_dir())
+        saved = Path(cfg.CONFIG_FILE).read_bytes()
+        cfg.initialize_config()
+        self.assertEqual(Path(cfg.CONFIG_FILE).read_bytes(), saved)
+        self.assertIs(cfg.config, reference)
+        loaded = cfg.load_config()
+        loaded["api"]["model_brain"] = "runtime-change"
+        data.write_private_json(cfg.CONFIG_FILE, loaded)
+        cfg.initialize_config()
+        self.assertEqual(reference["api"]["model_brain"], "runtime-change")
+
+    def test_existing_config_import_never_creates_missing_cipher_key(self):
+        name, _, data = self.load()
+        config_file = self.write(data.DATA_DIR / "config.json", json.dumps({
+            "api": {"model_brain": "existing"},
+            "reply_safety": {"blocked_keywords": ["ciphertext-without-key"]},
+            "knowledge_base_dir": "notes/nested",
+        }))
+        before = config_file.read_bytes()
+        with patch.object(Path, "mkdir", side_effect=AssertionError("import created directories")), \
+                patch("os.makedirs", side_effect=AssertionError("import created directories")), \
+                patch.object(data, "write_private_json", side_effect=AssertionError("import wrote config")):
+            cfg = self.load_config(name)
+            self.assertEqual(cfg.load_config()["api"]["model_brain"], "existing")
+        self.assertEqual(config_file.read_bytes(), before)
+        self.assertFalse(Path(cfg.CIPHER_KEY_FILE).exists())
+        self.assertFalse((data.USER_DATA_DIR / "notes").exists())
+
+    def test_initialization_invalid_config_or_failed_save_never_mutates_live_config(self):
+        name, _, data = self.load()
+        cfg = self.load_config(name)
+        reference = cfg.config
+        before = copy.deepcopy(reference)
+        with patch.object(cfg, "save_config", return_value=False):
+            with self.assertRaises(OSError):
+                cfg.initialize_config()
+        self.assertEqual(reference, before)
+        self.assertFalse(Path(cfg.CONFIG_FILE).exists())
+        self.write(Path(cfg.CONFIG_FILE), "null")
+        with patch.object(cfg, "ensure_user_data_dir", side_effect=AssertionError("initialized before validation")):
+            with self.assertRaises(ValueError):
+                cfg.initialize_config()
+        self.assertIs(cfg.config, reference)
+        self.assertEqual(reference, before)
+        self.assertEqual(Path(cfg.CONFIG_FILE).read_text(encoding="utf-8"), "null")
+
     def test_initial_config_import_rejects_non_object_json_without_rewriting(self):
         for value in (["CONFIG_CONTENT_CANARY"], "CONFIG_CONTENT_CANARY", None):
             with self.subTest(type=type(value).__name__):
@@ -351,6 +424,7 @@ class UserDataTests(unittest.TestCase):
     def test_config_knowledge_paths_use_root_and_validate_before_save(self):
         name, _, data = self.load()
         cfg = self.load_config(name)
+        cfg.initialize_config()
         self.assertEqual(Path(cfg.DATA_DIR), data.DATA_DIR)
         self.assertEqual(Path(cfg.BACKUP_DIR), data.BACKUPS_DIR)
         self.assertEqual(Path(cfg.resolve_knowledge_base_dir({"knowledge_base_dir": "notes/nested"})),

@@ -362,6 +362,16 @@ class AstrBotConfigBridgeTests(unittest.TestCase):
         self.assertEqual(self.cfg.config, self.initial)
         self.assertEqual(self.path.read_bytes(), corrupt_bytes)
 
+    def test_config_sync_handles_aliased_shared_and_cli_dictionaries(self):
+        cli = ModuleType(f"{PACKAGE}.cli.app")
+        cli.config = self.cfg.config
+        before = copy.deepcopy(self.cfg.config)
+        with patch.dict(sys.modules, {cli.__name__: cli}):
+            self.bridge._sync_loaded_config(self.cfg, self.cfg.config)
+        self.assertIs(cli.config, self.cfg.config)
+        self.assertEqual(self.cfg.config, before)
+        self.assertIs(self.cfg.config, self.config_reference)
+
     def test_non_object_json_config_fails_closed_without_changing_disk_or_memory(self):
         for value in (["CONFIG_CONTENT_CANARY"], "CONFIG_CONTENT_CANARY", None):
             with self.subTest(type=type(value).__name__):

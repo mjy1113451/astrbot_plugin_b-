@@ -112,6 +112,7 @@ from ..brain.video_analysis import manual_video_analysis, up_homepage_learn, _lo
 @_cli_only
 def _disclaimer_confirm():
     """显示红色免责声明，输入'我同意'后继续。"""
+    _initialize_cli_terminal()
     import os as _os
     # 通过环境变量跳过交互（Web面板启动子进程时使用）
     if _os.getenv('BILI_DISCLAIMER_SKIP'):
@@ -159,8 +160,6 @@ from ..persona.psycho import (
     PsychoProfile, RecommendationEngine,
     get_mode_emoji, get_mode_label,
 )
-
-_initialize_cli_terminal()
 
 try:
     from ..xingye_bot.llm import ModelClient
@@ -218,9 +217,6 @@ SELF_EVOLUTION_FILE = os.path.join(DATA_DIR, "self_evolution.json")
 AGENT_SKILL_LOG_FILE = os.path.join(DATA_DIR, "agent_skill_log.json")
 SEARCH_HISTORY_FILE = os.path.join(DATA_DIR, "search_history.json")  # 搜索记录
 RUNTIME_STATE_FILE = os.path.join(DATA_DIR, "bot_runtime_state.json")
-
-# 确保Data目录存在
-os.makedirs(DATA_DIR, exist_ok=True)
 
 # 默认配置
 DEFAULT_CONFIG = {
@@ -559,8 +555,18 @@ def save_config(config):
         lambda shared_config: shared_config.save_config(config)
     )
 
-# 加载当前配置
+# 导入只读取已有配置；首次持久化在显式启动菜单时进行。
 config = load_config()
+
+
+def initialize_cli():
+    """显式准备独立 CLI 的配置、目录和终端，而不是在 import 时修改宿主。"""
+    updated = _run_with_shared_config_path(lambda shared_config: shared_config.initialize_config())
+    if config is not updated:
+        config.clear()
+        config.update(updated)
+    _reload_all_globals(config)
+    _initialize_cli_terminal()
 
 
 def get_bot_name():
@@ -1063,6 +1069,7 @@ def show_shared_settings_menu():
 @_cli_only
 def show_main_menu():
     """显示主菜单"""
+    initialize_cli()
     global COMMENT_MODE
     # 获取兴趣数量
     interest_mgr = InterestManager()

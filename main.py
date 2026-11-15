@@ -252,6 +252,9 @@ class BilibiliLearningBot(Star):
                 return
 
             try:
+                from .core.config import initialize_config
+
+                initialize_config()
                 if self.config is not None:
                     from .core.astrbot_config_bridge import apply_astrbot_config
 
@@ -441,6 +444,9 @@ class BilibiliLearningBot(Star):
             return
 
         try:
+            from .core.config import initialize_config
+
+            initialize_config()
             from .brain.video_analysis import analyze_bilibili_video_input
 
             await analyze_bilibili_video_input(bvid)
@@ -464,6 +470,9 @@ class BilibiliLearningBot(Star):
             return
 
         try:
+            from .core.config import initialize_config
+
+            initialize_config()
             from .brain.video_analysis import up_homepage_learn
 
             # 非交互调用：显式给出默认值，避免函数内部三个 input() 阻塞事件循环
@@ -486,14 +495,17 @@ class BilibiliLearningBot(Star):
         用法：/bili_video2html [bvid]
         """
         try:
-            from .cli.app import video_to_html_bg
-
             bvid = (bvid or "").strip()
             if not bvid:
                 yield event.plain_result(
                     "ℹ️ 用法：/bili_video2html <bv号/链接>\n例如：/bili_video2html BV1xx411c7mD"
                 )
                 return
+            from .core.config import initialize_config
+
+            initialize_config()
+            from .cli.app import video_to_html_bg
+
             await video_to_html_bg(query=bvid)
         except Exception as exc:
             _log_exception("视频转HTML", exc)

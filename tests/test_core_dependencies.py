@@ -12,7 +12,7 @@ import sys
 import tempfile
 from types import ModuleType, SimpleNamespace
 import unittest
-from unittest.mock import Mock, patch
+from unittest.mock import Mock, call, patch
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -247,6 +247,9 @@ class StartBotDependencyTests(unittest.IsolatedAsyncioTestCase):
         package.__package__ = prefix
         core = ModuleType(f"{prefix}.core")
         core.__path__ = [str(ROOT / "core")]
+        config = ModuleType(f"{prefix}.core.config")
+        config.initialize_config = Mock()
+        core.config = config
         brain_package = ModuleType(f"{prefix}.brain")
         brain_package.__path__ = [str(ROOT / "brain")]
         brain = ModuleType(f"{prefix}.brain.agent_brain")
@@ -263,8 +266,9 @@ class StartBotDependencyTests(unittest.IsolatedAsyncioTestCase):
         brain_package.agent_brain = brain
         with patch.dict(sys.modules, {
             prefix: package, f"{prefix}.main": self.main,
-            core.__name__: core, brain_package.__name__: brain_package,
-            brain.__name__: brain, utils.__name__: utils, display.__name__: display,
+            core.__name__: core, config.__name__: config,
+            brain_package.__name__: brain_package, brain.__name__: brain,
+            utils.__name__: utils, display.__name__: display,
         }):
             yield brain.AgentBrain
 
@@ -276,12 +280,52 @@ class StartBotDependencyTests(unittest.IsolatedAsyncioTestCase):
         with dependency_environment(), self.brain_environment() as factory, patch.dict(
             sys.modules, {bridge.__name__: bridge}
         ):
+            initialize = sys.modules[f"{self.main.__package__}.core.config"].initialize_config
+            calls = Mock()
+            calls.attach_mock(initialize, "initialize")
+            calls.attach_mock(bridge.apply_astrbot_config, "apply")
+            calls.attach_mock(factory, "brain")
             factory.side_effect = lambda: (
                 bridge.apply_astrbot_config.assert_called_once_with(panel)
                 or SimpleNamespace(run=lambda: asyncio.Event().wait())
             )
             replies = await self.start()
         self.assertIn("已在后台启动", replies[0])
+        initialize.assert_called_once_with()
+        self.assertEqual(calls.mock_calls, [call.initialize(), call.apply(panel), call.brain()])
+
+    async def test_start_without_panel_configuration_explicitly_initializes_before_brain(self):
+        with dependency_environment(), self.brain_environment() as factory:
+            initialize = sys.modules[f"{self.main.__package__}.core.config"].initialize_config
+            calls = Mock()
+            calls.attach_mock(initialize, "initialize")
+            calls.attach_mock(factory, "brain")
+            replies = await self.start()
+            self.assertNotIn(f"{self.main.__package__}.core.astrbot_config_bridge", sys.modules)
+        self.assertIn("已在后台启动", replies[0])
+        self.assertIsNone(self.bot.config)
+        initialize.assert_called_once_with()
+        factory.assert_called_once_with()
+        self.assertEqual(calls.mock_calls, [call.initialize(), call.brain()])
+        self.assertIsNotNone(self.main._brain_task)
+
+    async def test_initialization_failure_prevents_bridge_and_brain_creation(self):
+        self.bot.config = {"use_astrbot_config": True}
+        bridge = ModuleType(f"{self.main.__package__}.core.astrbot_config_bridge")
+        bridge.apply_astrbot_config = Mock()
+        with dependency_environment(), self.brain_environment() as factory, patch.dict(
+            sys.modules, {bridge.__name__: bridge}
+        ):
+            initialize = sys.modules[f"{self.main.__package__}.core.config"].initialize_config
+            initialize.side_effect = OSError("fixture initialization failed")
+            replies = await self.start()
+        self.assertEqual(len(replies), 1)
+        self.assertIn("初始化失败", replies[0])
+        initialize.assert_called_once_with()
+        bridge.apply_astrbot_config.assert_not_called()
+        factory.assert_not_called()
+        self.cli._release_bot_lock.assert_not_called()
+        self.assertIsNone(self.main._brain_task)
 
     async def test_invalid_panel_configuration_prevents_brain_creation(self):
         self.bot.config = {"use_astrbot_config": True}
