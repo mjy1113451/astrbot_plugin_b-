@@ -5224,7 +5224,7 @@ async def video_to_html_bg(query: str | None = None):
 
         async with httpx.AsyncClient(http2=True, timeout=8.0) as _sc:
             async def _chk(_bvid):
-                async def _check_response(pd):
+                def _check_response(pd):
                     sts = pd.get('data', {}).get('subtitle', {}).get('subtitles', [])
                     if not sts:
                         sts = pd.get('data', {}).get('subtitles', [])
