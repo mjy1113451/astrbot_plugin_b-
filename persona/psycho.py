@@ -29,6 +29,7 @@ from datetime import datetime, timedelta
 from collections import defaultdict, Counter
 from math import log2
 from ..core.user_data import DATA_DIR as _SHARED_DATA_DIR
+from ..utils.display import log_exception
 
 # ── 文件路径 ─────────────────────────────────────────────────
 DATA_DIR = str(_SHARED_DATA_DIR)
@@ -50,7 +51,7 @@ def _load_json(path, default=None):
             with open(path, "r", encoding="utf-8") as f:
                 return json.load(f)
         except Exception as e:
-            print(f"[psycho] JSON加载失败 {path}: {e}")
+            log_exception("[psycho] JSON加载失败", e)
     return default
 
 
@@ -64,7 +65,7 @@ def _save_json(path, data):
         os.replace(tmp, path)
         return True
     except Exception as e:
-        print(f"[psycho] JSON保存失败 {path}: {e}")
+        log_exception("[psycho] JSON保存失败", e)
         return False
 
 
@@ -635,7 +636,7 @@ class PsychoProfile:
             # 任务被取消，不打印错误，直接返回
             return False
         except Exception as e:
-            print(f"[PsychoProfile] AI分析失败: {e}")
+            log_exception("[PsychoProfile] AI分析失败", e)
         return False
 
     def _build_l1_summary(self):
@@ -859,7 +860,7 @@ class RecommendationEngine:
                           for line in content.split("\n") if line.strip()]
                 return queries[:count]
         except Exception as e:
-            print(f"[Recommendation] 关键词生成失败: {e}")
+            log_exception("[Recommendation] 关键词生成失败", e)
 
         return self._fallback_queries(mode, count)
 

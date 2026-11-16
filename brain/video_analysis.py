@@ -345,7 +345,7 @@ async def manual_video_analysis(force_platform: str | None = "bilibili"):
 
         async with httpx.AsyncClient(http2=True, timeout=8.0) as _sc:
             async def _chk(bvid):
-                async def _check_response(pd):
+                def _check_response(pd):
                     sts = pd.get('data', {}).get('subtitle', {}).get('subtitles', [])
                     if not sts:
                         sts = pd.get('data', {}).get('subtitles', [])
