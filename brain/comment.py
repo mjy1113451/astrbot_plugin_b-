@@ -19,6 +19,7 @@ from datetime import datetime
 from ..utils.helpers import _mask_urls, parse_iso_datetime, ensure_ai_marker
 from ..api.throttle import _bili_throttle, _bili_trigger_cooldown
 from ..core.platform_actions import public_commenting_enabled
+from ..core.action_permissions import allowed
 from ..services.utils import BiliToolbox
 
 # bilibili_api imports (used by the class)
@@ -549,11 +550,14 @@ class CommentInteractionManager:
     async def reply_to_comment(self, bili_client, comment_data, ai_response, *, is_at_mention=False):
         """Reply to a comment. Explicit @ mentions use a separate policy gate."""
         self.last_reply_failure = {}
+        if not allowed("public_comment"):
+            log("公开评论回复未获授权，未发送", "WARN")
+            return False
         from ..core.platform_actions import at_mention_replies_enabled
-        allowed = at_mention_replies_enabled() if is_at_mention else public_commenting_enabled()
-        if not allowed:
+        policy_enabled = at_mention_replies_enabled() if is_at_mention else public_commenting_enabled()
+        if not policy_enabled:
             action = "@我回复" if is_at_mention else "评论与评论点赞"
-            log(f"{action}已被全局安全策略禁用", "WARN")
+            log(f"{action}已被全局安全策略禁用，未发送", "WARN")
             return False
         try:
             comment_id = comment_data['id']
@@ -588,6 +592,9 @@ class CommentInteractionManager:
                 "COMMENT",
             )
             await _bili_throttle()  # 🔒 全局节流
+            if not allowed("public_comment"):
+                log("公开评论回复授权已撤销，未发送", "WARN")
+                return False
             await comment.send_comment(
                 text=final_response,
                 oid=aid,
@@ -624,6 +631,9 @@ class CommentInteractionManager:
     
     async def like_comment(self, bili_client, comment_data):
         """点赞评论"""
+        if not allowed("comment_like"):
+            log("评论点赞未获授权，未执行", "WARN")
+            return False
         if not public_commenting_enabled():
             log("评论与评论点赞已被全局安全策略禁用", "WARN")
             return False
@@ -637,6 +647,9 @@ class CommentInteractionManager:
                 rpid=comment_id,
                 credential=self.credential
             )
+            if not allowed("comment_like"):
+                log("评论点赞授权已撤销，未执行", "WARN")
+                return False
             await comment_obj.like(status=True)
             
             self.log_interaction(comment_id, "like", "点赞", comment_data['user'])
@@ -783,9 +796,10 @@ class CommentInteractionManager:
                                 )
                     
                 elif action == 'like':
-                    await self.like_comment(bili_client, comment_data)
-                    self.user_profile_mgr.adjust_affinity(comment_data.get("user_id"), comment_data.get("user"), 1, "点赞评论")
-                    processed += 1
+                    liked = await self.like_comment(bili_client, comment_data)
+                    if liked:
+                        self.user_profile_mgr.adjust_affinity(comment_data.get("user_id"), comment_data.get("user"), 1, "点赞评论")
+                        processed += 1
                 
                 # 标记为已处理
                 self._mark_comment_processed(comment_data['id'])

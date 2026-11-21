@@ -9,6 +9,7 @@ import asyncio, json, os, sys, re, time, hashlib
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
 import httpx
+from ..core.action_permissions import allowed
 from ..core.config import config as _core_config, resolve_knowledge_base_dir
 from ..core.user_data import DATA_DIR as _USER_DATA_DIR
 from ..core.platform_actions import public_commenting_enabled
@@ -149,6 +150,9 @@ class StandbyBot:
     async def _post_comment(self, client: httpx.AsyncClient, bvid_or_aid: str, root_rpid: int,
                             parent_rpid: int, content: str) -> bool:
         """回复评论（自动兼容oid=aid和bvid）"""
+        if not allowed("public_comment"):
+            self._log("公开评论未授权，未执行", "WARN")
+            return False
         if not public_commenting_enabled():
             self._log("评论回复已被全局安全策略禁用", "WARN")
             return False
@@ -156,6 +160,9 @@ class StandbyBot:
             oid = bvid_or_aid
             if not oid.isdigit() or len(oid) > 10:
                 oid = await self._bvid_to_oid(client, bvid_or_aid)
+            if not allowed("public_comment"):
+                self._log("公开评论未授权，未执行", "WARN")
+                return False
             payload = {
                 'oid': int(oid), 'type': 1, 'root': root_rpid, 'parent': parent_rpid,
                 'message': content, 'plat': 1
@@ -489,13 +496,14 @@ class StandbyBot:
             reply_text = await self._answer_rag_question(ntf.get('content', ''))
             if len(reply_text) > 500:
                 reply_text = reply_text[:480] + "...[完整回答请在Web面板知识库问答查看]"
-            await self._post_comment(
+            success = await self._post_comment(
                 client, aid_str,
                 int(rpid) if rpid.isdigit() else 0,
                 int(rpid) if rpid.isdigit() else 0,
                 reply_text or "知识库暂未找到相关内容。"
             )
-            self.stats['at_replies'] += 1
+            if success:
+                self.stats['at_replies'] += 1
             save_stats(self.stats)
             return
 
@@ -520,9 +528,6 @@ class StandbyBot:
             reply_text = f"生成视频《{video_info.get('title','')[:30]}》总结时出了问题，请稍后重试〜"
         else:
             reply_text = summary
-            self.stats['at_replies'] += 1
-            self.stats.setdefault('notifications_handled', 0)
-            self.stats['notifications_handled'] = self.stats.get('notifications_handled', 0) + 1
 
         if len(reply_text) > 500:
             reply_text = reply_text[:480] + "...[内容较长已截断]"
@@ -534,6 +539,9 @@ class StandbyBot:
             reply_text
         )
         if success:
+            if summary:
+                self.stats['at_replies'] += 1
+                self.stats['notifications_handled'] = self.stats.get('notifications_handled', 0) + 1
             self._log(f"[OK] 已回复 (bv={target_bv})", "OK")
         save_stats(self.stats)
 
@@ -566,14 +574,16 @@ class StandbyBot:
             return
 
         summary = await self._generate_summary(video_info, subtitle_text)
+        generated_summary = bool(summary)
         if summary:
-            self.stats['at_replies'] += 1
             if len(summary) > 500:
                 summary = summary[:480] + "...[内容较长已截断]"
         else:
             summary = f"生成视频《{video_info['title'][:30]}》总结时遇到问题。"
 
-        await self._post_comment(client, my_bvid, int(comment['rpid']), int(comment['rpid']), summary)
+        success = await self._post_comment(client, my_bvid, int(comment['rpid']), int(comment['rpid']), summary)
+        if success and generated_summary:
+            self.stats['at_replies'] += 1
         save_stats(self.stats)
 
     async def _get_video_info(self, client: httpx.AsyncClient, bvid: str) -> dict:

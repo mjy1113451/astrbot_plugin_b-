@@ -14,6 +14,7 @@ from ..core.config import (
     BEHAVIOR_PRIVATE_REPLY_COOLDOWN_MINUTES, AI_MARKER,
 )
 from ..core.user_data import DATA_DIR
+from ..core.action_permissions import allowed
 
 # 以下变量仅定义在 start_cli.py 中，此处从 config 读取
 PRIVATE_MESSAGE_AUTO_REPLY = config.get("private_message", {}).get("auto_reply", False)
@@ -604,7 +605,7 @@ UID: {message_data.get('talker_id')}
             f"我先把{subject}的标题、简介和能读到的内容过一遍，稍后回来聊。",
         )
         acknowledgement = random.choice(variants)
-        log(f"[Agent] 已发送视频阅读进度 @{message_data.get('talker_id')}: {bvid}", "BRAIN")
+        log(f"[Agent] 准备发送视频阅读进度 @{message_data.get('talker_id')}: {bvid}", "BRAIN")
         try:
             result = await self.send_reply(
                 message_data.get("talker_id"), acknowledgement,
@@ -612,8 +613,12 @@ UID: {message_data.get('talker_id')}
             )
             if isinstance(result, dict) and result.get("queued"):
                 log(f"[Agent] 视频阅读进度已进入审核队列 @{message_data.get('talker_id')}", "INFO")
-            elif isinstance(result, dict) and result.get("sent") is False:
+            elif result is False or (isinstance(result, dict) and (
+                result.get("sent") is False or result.get("code") not in (None, 0, "0")
+            )):
                 log("[Agent] 视频阅读进度未发送", "WARN")
+            else:
+                log(f"[Agent] 已发送视频阅读进度 @{message_data.get('talker_id')}: {bvid}", "BRAIN")
         except Exception as exc:
             log_exception("[Agent] 视频阅读进度发送失败，继续处理内容", exc)
 
@@ -923,6 +928,9 @@ UID: {message_data.get('talker_id')}
             return 75.0
 
     async def send_reply(self, receiver_id, reply, audit_payload=None, remember_outbound=True):
+        if not allowed("private_reply"):
+            log("私信未获授权，未发送，也未提交审核", "WARN")
+            return {"sent": False, "queued": False, "message": "发送私信未获授权，未发送"}
         from ..services.like_review import ActionReviewInbox, requires_review
         # Review settings are editable while the monitor is running. Do not
         # consult this module's startup-time config snapshot here.
@@ -934,6 +942,8 @@ UID: {message_data.get('talker_id')}
                 payload.update(audit_payload)
             if remember_outbound:
                 payload["remember_outbound"] = True
+            if not allowed("private_reply"):
+                return {"sent": False, "queued": False, "message": "发送私信授权已撤销，未发送"}
             ActionReviewInbox(DATA_DIR).propose(
                 "private_reply",
                 f"回复用户 {receiver_id} 的私信",
@@ -944,6 +954,9 @@ UID: {message_data.get('talker_id')}
             log(f"私信回复建议已进入 AI 行为审核: {receiver_id}", "INFO")
             return {"queued": True, "message": "等待用户审核"}
         await _bili_throttle()  # 🔒 全局节流
+        if not allowed("private_reply"):
+            log("发送私信授权已撤销，未发送", "WARN")
+            return {"sent": False, "queued": False, "message": "发送私信授权已撤销，未发送"}
         result = await bili_session.send_msg(
             credential=self.credential,
             receiver_id=int(receiver_id),
@@ -952,9 +965,13 @@ UID: {message_data.get('talker_id')}
         )
         # The platform can return an error dictionary without raising.  Do not
         # turn that into a misleading "sent" history entry.
+        if result is False:
+            return {"sent": False, "message": "平台未接受该私信"}
         if isinstance(result, dict):
+            if result.get("queued"):
+                return result
             code = result.get("code")
-            if code not in (None, 0, "0"):
+            if result.get("sent") is False or code not in (None, 0, "0"):
                 return {
                     "sent": False,
                     "code": code,
@@ -1045,7 +1062,6 @@ UID: {message_data.get('talker_id')}
                             metadata={"msg_id": msg["id"], "timeout_seconds": timeout_seconds},
                         )
                         self._mark_message_bundle_processed(msg)
-                        processed += 1
                         continue
                 reply_messages = self._split_reply_messages(reply)
                 if not reply_messages:
@@ -1086,10 +1102,10 @@ UID: {message_data.get('talker_id')}
                         if isinstance(result, dict) and result.get("queued"):
                             queued_messages.append(part)
                             log(f"私信第 {index + 1}/{len(reply_messages)} 段已进入审核队列，尚未发送 @{msg['talker_id']}", "INFO")
-                        elif isinstance(result, dict) and result.get("sent") is False:
-                            entry["send_error"] = result.get("message", "平台未接受该私信")
-                            code = result.get("code")
-                            suffix = f" (代码 {code})" if code not in (None, "") else ""
+                        elif result is False or (isinstance(result, dict) and (
+                            result.get("sent") is False or result.get("code") not in (None, 0, "0")
+                        )):
+                            entry["send_error"] = (result.get("message") if isinstance(result, dict) else "") or "平台未接受该私信"
                             log(f"私信第 {index + 1} 段未发送，平台未接受操作", "WARN")
                             break
                         else:
@@ -1133,7 +1149,8 @@ UID: {message_data.get('talker_id')}
                         consecutive_ai_replies=0,
                     )
                 self._mark_message_bundle_processed(msg)
-                processed += 1
+                if delivered_messages or not should_auto_reply:
+                    processed += 1
                 await asyncio.sleep(random.uniform(10, 25))
             except Exception as e:
                 log_exception("处理私信失败", e)

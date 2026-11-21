@@ -27,9 +27,8 @@
 bilibili-api-python>=17.4.1,<18
 colorama>=0.4.6,<1
 qrcode-terminal>=0.8,<1
-pystray>=0.19.5,<1
+# 独立 CLI 的本地 HTML 预览，不包含 Web 管理后台或桌面托盘。
 Flask>=3.0,<4
-flask-cors>=4.0,<7
 requests>=2.31,<3
 imageio-ffmpeg>=0.6.0,<1
 yt-dlp>=2025.6.30

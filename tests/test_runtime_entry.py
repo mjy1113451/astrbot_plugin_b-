@@ -1,12 +1,21 @@
 """Issue #41 host/CLI boundaries without importing business dependencies."""
+import asyncio
 from contextlib import ExitStack
 import runpy
 import sys
 from types import ModuleType, SimpleNamespace
 import unittest
-from unittest.mock import Mock, patch
+from unittest.mock import Mock, call, patch
 
-from test_package_imports import ROOT, PACKAGE_A, _package_environment
+from test_package_imports import ROOT, PACKAGE_A, PACKAGES, _package_environment
+
+
+BUSINESS_COMMANDS = (
+    ("start_bot", (), "brain.agent_brain"),
+    ("analyze_video", ("BV1Q541167Qg",), "brain.video_analysis"),
+    ("up_learn", ("1",), "brain.video_analysis"),
+    ("video_to_html", ("BV1Q541167Qg",), "cli.app"),
+)
 
 
 class RuntimeEntryTests(unittest.IsolatedAsyncioTestCase):
@@ -15,6 +24,107 @@ class RuntimeEntryTests(unittest.IsolatedAsyncioTestCase):
         self.addCleanup(self.stack.close)
         self.environment = self.stack.enter_context(_package_environment())
         self.main = self.environment.load_main(PACKAGE_A)
+
+    async def asyncTearDown(self):
+        tasks = {main._brain_task for main in self.environment.loaded_mains
+                 if main._brain_task is not None}
+        for task in tasks:
+            task.cancel()
+        if tasks:
+            await asyncio.gather(*tasks, return_exceptions=True)
+            await asyncio.sleep(0)
+
+    async def finish_brain(self, main, runtime):
+        task = main._brain_task
+        if task is not None:
+            runtime.finished.set()
+            await asyncio.gather(task, return_exceptions=True)
+            await asyncio.sleep(0)
+
+    async def test_all_business_commands_initialize_then_apply_once_before_business_import(self):
+        panel = {
+            "use_astrbot_config": True, "apply_sections": ["ai_permissions"],
+            "ai_permissions": {"enabled": True, "actions": {"coin": True}},
+        }
+        for package in PACKAGES:
+            main = self.main if package == PACKAGE_A else self.environment.load_main(package)
+            for name, args, business_import in BUSINESS_COMMANDS:
+                with self.subTest(package=package, command=name):
+                    runtime = self.environment.install_runtime(package)
+                    bot = self.environment.construct_bot(main, panel)
+                    event = SimpleNamespace(plain_result=lambda text: text)
+                    order = Mock()
+                    order.attach_mock(runtime.config.initialize_config, "initialize")
+                    order.attach_mock(runtime.bridge.apply_astrbot_config, "apply")
+                    imports = []
+
+                    def ordered_import(name, globals=None, locals=None, fromlist=(), level=0):
+                        if level == 1 and globals.get("__package__") == package:
+                            if name == "core.astrbot_config_bridge":
+                                runtime.config.initialize_config.assert_called_once_with()
+                                runtime.bridge.apply_astrbot_config.assert_not_called()
+                                imports.append(name)
+                            elif name == business_import:
+                                runtime.config.initialize_config.assert_called_once_with()
+                                runtime.bridge.apply_astrbot_config.assert_called_once_with(panel)
+                                imports.append(name)
+                        return self.environment.guarded_import(name, globals, locals, fromlist, level)
+
+                    with patch("builtins.__import__", new=ordered_import):
+                        replies = [reply async for reply in getattr(bot, name)(event, *args)]
+                    self.assertEqual(len(replies), 1)
+                    self.assertIn("已在后台启动" if name == "start_bot" else "完成", replies[0])
+                    self.assertEqual(order.mock_calls, [call.initialize(), call.apply(panel)])
+                    self.assertIs(runtime.bridge.apply_astrbot_config.call_args.args[0], panel)
+                    self.assertEqual(imports, ["core.astrbot_config_bridge", business_import])
+                    if name == "start_bot":
+                        runtime.brain.AgentBrain.assert_called_once_with()
+                    elif name == "analyze_video":
+                        runtime.video.analyze_bilibili_video_input.assert_awaited_once_with(*args)
+                    elif name == "up_learn":
+                        runtime.video.up_homepage_learn.assert_awaited_once_with(
+                            query=args[0], limit=10, skip_without_subtitle=True, min_score=7.0,
+                        )
+                    else:
+                        runtime.app.video_to_html_bg.assert_awaited_once_with(query=args[0])
+                    await self.finish_brain(main, runtime)
+                    self.environment.assert_isolated(self)
+
+    async def test_noninteractive_jobs_without_panel_initialize_without_loading_bridge(self):
+        bot = self.environment.construct_bot(self.main)
+        runtime = self.environment.install_runtime(PACKAGE_A, with_bridge=False)
+        event = SimpleNamespace(plain_result=lambda text: text)
+        for name, args, _ in BUSINESS_COMMANDS[1:]:
+            with self.subTest(command=name):
+                runtime.config.initialize_config.reset_mock()
+                replies = [reply async for reply in getattr(bot, name)(event, *args)]
+                self.assertIn("完成", replies[0])
+                runtime.config.initialize_config.assert_called_once_with()
+                self.assertNotIn(PACKAGE_A + ".core.astrbot_config_bridge", sys.modules)
+        self.environment.assert_isolated(self)
+
+    async def test_all_business_commands_abort_before_business_import_when_bridge_fails(self):
+        panel = {"use_astrbot_config": True}
+        bot = self.environment.construct_bot(self.main, panel)
+        event = SimpleNamespace(plain_result=lambda text: text)
+        for name, args, business_import in BUSINESS_COMMANDS:
+            with self.subTest(command=name):
+                runtime = self.environment.install_runtime(PACKAGE_A)
+                runtime.bridge.apply_astrbot_config.side_effect = ValueError("PRIVATE_PANEL_CANARY")
+                with patch("builtins.__import__", wraps=self.environment.guarded_import) as imports:
+                    replies = [reply async for reply in getattr(bot, name)(event, *args)]
+                self.assertEqual(len(replies), 1)
+                self.assertIn("失败", replies[0])
+                self.assertNotIn("PRIVATE_PANEL_CANARY", replies[0])
+                runtime.config.initialize_config.assert_called_once_with()
+                runtime.bridge.apply_astrbot_config.assert_called_once_with(panel)
+                self.assertNotIn(business_import, [item.args[0] for item in imports.call_args_list])
+                runtime.brain.AgentBrain.assert_not_called()
+                runtime.video.analyze_bilibili_video_input.assert_not_awaited()
+                runtime.video.up_homepage_learn.assert_not_awaited()
+                runtime.app.video_to_html_bg.assert_not_awaited()
+                self.assertIsNone(self.main._brain_task)
+                self.environment.assert_isolated(self)
 
     async def test_plugin_never_enters_terminal_menus_even_when_host_has_tty(self):
         bot = self.environment.construct_bot(self.main)
@@ -39,20 +149,27 @@ class RuntimeEntryTests(unittest.IsolatedAsyncioTestCase):
                 self.assertIn("用法", replies[0])
         self.environment.assert_isolated(self)
 
-    async def test_noninteractive_jobs_stop_when_profile_initialization_fails(self):
-        bot = self.environment.construct_bot(self.main)
+    async def test_all_business_commands_stop_when_profile_initialization_fails(self):
+        bot = self.environment.construct_bot(self.main, {"use_astrbot_config": True})
         runtime = self.environment.install_runtime(PACKAGE_A)
         runtime.config.initialize_config.side_effect = ValueError("PRIVATE_CONFIG_CANARY")
         event = SimpleNamespace(plain_result=lambda text: text)
-        for name, value in (("analyze_video", "BV1Q541167Qg"), ("up_learn", "1"),
-                            ("video_to_html", "BV1Q541167Qg")):
+        for name, args, business_import in BUSINESS_COMMANDS:
             with self.subTest(command=name):
-                replies = [reply async for reply in getattr(bot, name)(event, value)]
+                with patch("builtins.__import__", wraps=self.environment.guarded_import) as imports:
+                    replies = [reply async for reply in getattr(bot, name)(event, *args)]
                 self.assertEqual(len(replies), 1)
                 self.assertIn("失败", replies[0])
                 self.assertNotIn("PRIVATE_CONFIG_CANARY", replies[0])
-        self.assertEqual(runtime.config.initialize_config.call_count, 3)
+                imported = [item.args[0] for item in imports.call_args_list]
+                self.assertNotIn("core.astrbot_config_bridge", imported)
+                self.assertNotIn(business_import, imported)
+        self.assertEqual(runtime.config.initialize_config.call_count, len(BUSINESS_COMMANDS))
+        runtime.bridge.apply_astrbot_config.assert_not_called()
         runtime.brain.AgentBrain.assert_not_called()
+        runtime.video.analyze_bilibili_video_input.assert_not_awaited()
+        runtime.video.up_homepage_learn.assert_not_awaited()
+        runtime.app.video_to_html_bg.assert_not_awaited()
         self.assertIsNone(self.main._brain_task)
         self.environment.assert_isolated(self)
 

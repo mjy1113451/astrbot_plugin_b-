@@ -12,6 +12,7 @@ import atexit
 import time
 import shutil
 from pathlib import Path
+from copy import deepcopy
 import tempfile
 import qrcode
 import httpx
@@ -113,12 +114,6 @@ from ..brain.video_analysis import manual_video_analysis, up_homepage_learn, _lo
 def _disclaimer_confirm():
     """显示红色免责声明，输入'我同意'后继续。"""
     _initialize_cli_terminal()
-    import os as _os
-    # 通过环境变量跳过交互（Web面板启动子进程时使用）
-    if _os.getenv('BILI_DISCLAIMER_SKIP'):
-        print("⚠ Web面板模式：已跳过免责声明确认")
-        return True
-
     _TARGET = "我同意"
     banner = f"""
 {Fore.RED}{'='*60}
@@ -219,309 +214,16 @@ SEARCH_HISTORY_FILE = os.path.join(DATA_DIR, "search_history.json")  # 搜索记
 RUNTIME_STATE_FILE = os.path.join(DATA_DIR, "bot_runtime_state.json")
 
 # 默认配置
-DEFAULT_CONFIG = {
-    "api": {
-        "unified_api_key": "",
-        "max_retries": 3,
-        "fallback_retries": 2,
-        "unified_base_url": "",
-        "model_brain": "",
-        "model_vision": "",
-        "model_html": "",
-        "vision_api_key": "",
-        "vision_base_url": ""
-    },
-    "interaction": {
-        "coin_threshold": 8.0,
-        "fav_threshold": 8.5,
-        "interest_threshold": 6.5,
-        "learn_min_score": 6.0,  # 学习归档最低分数门槛，低于此分不归档
-        "learn_min_duration_seconds": 60,  # 学习归档最低视频时长(秒)，短于此不归档
-        "max_coins_daily": 2,
-        "max_energy": 100,
-        "prob_reply_trigger": 0.15,
-        "prob_coin": 0.25,
-        "prob_fav": 0.8,
-        "prob_like_solo": 0.5,
-        "prob_comment_others": 0.3,  # 评论他人评论的概率
-        "prob_reply_comment_like": 0.25,  # 回复评论后点赞的概率
-        "comment_check_interval": 300,  # 检查新评论的间隔（秒），默认5分钟
-        "max_replies_per_check": 3,  # 每次检查最多回复几条评论
-        "random_enabled": True  # 随机数限制开关：True=启用随机检定(更自然), False=关闭随机(只看分数阈值)
-    },
-    "energy": {
-        "energy_recovery_min": 5,
-        "energy_recovery_max": 10,
-        "rounds_min": 3,
-        "rounds_max": 10,
-        "round_interval_min": 60,
-        "round_interval_max": 180,
-        "video_interval_min": 1,
-        "video_interval_max": 5
-    },
-    "persona": {
-        "active_persona": "默认人格",
-        "prompt_name": "AI小助手"
-    },
-    "mood": {
-        "default_mood": "平静",
-        "mood_volatility": 1.0,
-        "random_enabled": False,
-        "random_interval_minutes": 5,
-        "custom_enabled": False,
-        "custom_mood": ""
-    },
-    "video": {
-        "mode": "smart",
-        "max_duration_seconds": 900,
-        "frame_count": 12,
-        "download_interest_threshold": 7.0,
-        "download_dir": "",
-        "delete_video_after_understand": True,
-        "filter_mode": "cover_and_title",
-        "frame_note_mode": "visual_note",
-        "candidate_pool_size": 20,
-        "visual_note_frame_interval": 6,
-        "visual_note_max_frames": 240,
-        "visual_note_grid_cols": 3,
-        "visual_note_grid_rows": 3,
-    },
-    "vision": {
-        "_comment": "视觉理解: 视频抽帧+评论图片AI分析",
-        "cover_enabled": True,
-        "frames_enabled": True,
-        "comment_images_enabled": True,
-        "max_comment_images": 5,
-        "frame_count": 8
-    },
-    "asr": {
-        "enabled": False,
-        "backend": "funasr",
-        "whisper_model": "base",
-        "language": "zh",
-        "speaker_separation": True,
-        "max_audio_duration": 3600,
-        "min_confidence": 0.5,
-        "skip_music": True,
-        "keep_audio": False,
-        "ffmpeg_path": "",
-        "device": "cpu",
-        "funasr_model_dir": "",
-        "funasr_vad_enabled": True,
-        "funasr_punc_enabled": True,
-        "funasr_spk_enabled": False,
-        "funasr_batch_size_s": 300,
-        "funasr_hotword": ""
-    },
-    "private_message": {
-        "enabled": True,
-        "auto_reply": True,
-        "check_interval": 120,
-        "max_replies_per_check": 3,
-        "only_recent_seconds": 900
-    },
-    "reply_safety": {
-        "enabled": True,
-        "block_on_incoming": True,
-        "block_on_outgoing": True,
-        "block_political_video_comments": True,
-        "blocked_keywords": [
-            "主席", "党", "国家", "政治", "政府", "共产党", "中共", "习近平", "毛泽东",
-            "人大", "国务院", "军委", "台湾", "香港", "新疆", "西藏", "六四", "法轮",
-            "选举", "民主", "独裁", "宪法", "外交部", "制裁", "战争", "俄乌", "以色列",
-            "巴勒斯坦", "日本右翼", "靖国神社", "民族主义", "爱国", "辱华", "台独", "港独",
-            "藏独", "疆独", "抗议", "游行", "维权", "人权", "警察", "军队", "解放军",
-            "武统", "一国两制", "资本主义", "社会主义", "马列", "毛选"
-        ]
-    },
-    "diary": {
-        "enabled": True,
-        "auto_enabled": True,
-        "auto_interval_minutes": 60,
-        "min_events_for_auto": 3
-    },
-    "self_evolution": {
-        "enabled": True,
-        "auto_enabled": True,
-        "reflect_interval_events": 8,
-        "min_events_for_reflect": 3,
-        "auto_apply": True
-    },
-    "agent": {
-        "enabled": True,
-        "auto_enabled": True,
-        "max_steps_per_plan": 5,
-        "max_search_results": 8,
-        "max_videos_per_plan": 5,
-        "auto_min_score": 7.5,
-        "cooldown_minutes": 60
-    },
-    "behavior": {
-        "comment_mode": "real",
-        "ai_marker": "（内容由AI生成并由AI回复）",
-        "private_reply_cooldown_minutes": 3,
-        "comment_user_cooldown_minutes": 60,
-        "max_consecutive_ai_replies": 3,
-        "min_reply_delay_seconds": 20,
-        "max_reply_delay_seconds": 50,
-        "prefer_short_replies": True
-    },
-    "session": {
-        "max_videos": 0,
-        "max_duration_minutes": 0
-    },
-    "revisit": {
-        "enabled": True,
-        "prob_revisit": 0.25,
-        "revisit_cooldown_minutes": 15,
-        "min_score": 7.5,
-        "max_per_video": 2,
-        "per_video_cooldown_minutes": 240
-    },
-    "active_chat": {
-        "enabled": False,
-        "prob_initiate": 0.06,
-        "cooldown_minutes": 45,
-        "max_initiate_per_session": 3,
-        "quiet_hours_enabled": True,
-        "quiet_start_hour": 22,
-        "quiet_end_hour": 8,
-        "whitelist_enabled": False,
-        "whitelist_uids": []
-    },
-    "up_follow": {
-        "enabled": True,
-        "auto_follow_prob": 0.08,
-        "max_daily_follows": 3,
-        "unfollow_inactive_days": 0,
-        "browse_up_videos_prob": 0.06,
-        "max_browse_videos": 3,
-        "cooldown_minutes": 90,
-        "favorite_up_browse_prob": 0.25,
-        "favorite_up_uid_list": [],
-        "test_mode": False
-    },
-    "danmaku": {
-        "enabled": True,
-        "read_prob": 0.4,
-        "like_prob": 0.15,
-        "max_daily_danmaku_likes": 10,
-        "send_prob": 0.03,
-        "max_daily_send": 2
-    },
-    "fallback_provider": {
-        "enabled": False,
-        "name": "备用API",
-        "api_key": "",
-        "base_url": "",
-        "models": {
-            "chat": "",
-            "vision": ""
-        }
-    },
-    "fallback_models": {
-        "chat": "",
-        "vision": "",
-        "fast": ""
-    },
-    "knowledge": {
-        "auto_reclassify_enabled": True,
-        "auto_reclassify_interval_minutes": 10,
-        "auto_reclassify_clean_empty": True
-    },
-    "knowledge_verify": {
-        "enabled": True,
-        "use_web_search": True,
-        "min_reliability_score": 0.7,
-        "auto_fix": True
-    },
-    "curiosity_search": {
-        "enabled": True,
-        "max_videos_per_dive": 10,
-        "dive_videos_default": 3,
-        "dive_videos_mid": 5,
-        "dive_videos_max": 10,
-        "trigger_min_score": 7.5,
-        "prob_trigger": 0.3,
-        "cooldown_minutes": 120
-    },
-    "dry_goods": {
-        "enabled": False,
-        "min_score": 7.5,
-        "folder_name": "highlights"
-    },
-    "web": {
-        "username": "",
-        "password": ""
-    },
-    "platform_adapter": {
-        "enabled": True,
-        "ui_platforms": ["bilibili", "youtube", "douyin", "kuaishou", "web", "local"],
-        "supported": ["bilibili", "youtube", "douyin", "kuaishou", "web", "local"],
-        "prefer_platform_subtitles": True,
-        "subtitle_langs": ["zh-Hans", "zh", "zh-CN", "en"],
-        "download_format": "bv*+ba/best/best",
-        "proxy": "",
-        "allow_web_local_files": False,
-    },
-    "ai_subtitle_verify": {
-        "enabled": True,
-        "knowledge_review_interval": 10,
-        "knowledge_review_sample_size": 3
-    },
-    "cooldown": {
-        "startup_cooldown_min": 5,
-        "startup_cooldown_max": 10,
-        "post_comment_cooldown_min": 3,
-        "post_comment_cooldown_max": 8,
-        "post_dm_cooldown_min": 3,
-        "post_dm_cooldown_max": 8
-    },
-    "psycho_engine": {
-        "enabled": True,
-        "deep_analyze_interval_videos": 100,
-        "heuristic_update_interval": 15,
-        "cocoon_detect_interval": 15,
-        "cocoon_warning_threshold": 0.35,
-        "recommend_prob_per_round": 0.08,
-        "min_views_before_recommend": 10,
-        "max_surprise_daily": 5,
-        "max_explore_daily": 5,
-        "max_anticocoon_daily": 3,
-        "min_actions_for_deep_analysis": 50,
-        "deep_analysis_cooldown_seconds": 14400,
-        "max_actions_in_log": 2000,
-        "max_recommendation_log": 200,
-        "aversion_auto_blacklist_threshold": 3,
-        "aversion_score_block_threshold": 0.7,
-        "aversion_score_warn_threshold": 0.4
-    },
-    "ob": {
-        "enabled": False,
-        "base_url": "http://127.0.0.1:8420",
-        "auto_launch": False,
-        "launch_command": "openbiliclaw serve",
-        "launch_cwd": "",
-        "health_check_timeout_seconds": 5,
-        "recommendation_fetch_limit": 20,
-        "feedback_enabled": True,
-        "event_report_enabled": True,
-        "profile_sync_enabled": True,
-        "explore_mode_fallback": True,
-        "explore_pools": ["科技", "编程", "物理", "数学", "历史", "哲学"],
-        "curiosity_keyword_ttl_hours": 24,
-        "audit_enabled": True,
-        "ab_test_enabled": True,
-        "ab_window_size": 200
-    }
-}
+from ..core.config import DEFAULT_CONFIG as _SHARED_DEFAULT_CONFIG
 
-# 配置读写必须与网页端共用 core.config：它负责默认值、敏感词加密和原子写入。
+DEFAULT_CONFIG = deepcopy(_SHARED_DEFAULT_CONFIG)
+
+# 配置读写必须与插件共用 core.config：它负责默认值、敏感词加密和原子写入。
 # 保留本模块的函数名，避免改动各个旧菜单的调用点。
 def _run_with_shared_config_path(operation):
     """Run a core.config operation against CLI's overridden test path when needed.
 
-    Production CLI and Web UI both point at the same Data/config.json.  Tests and
+    Production CLI and plugin share the selected Data/config.json.  Tests and
     embedding callers can override ``CONFIG_FILE`` though, so keep that override
     scoped to this call instead of accidentally writing user data to the real
     shared location.
@@ -545,12 +247,12 @@ def _run_with_shared_config_path(operation):
 
 
 def load_config():
-    """Load the single shared configuration used by Web UI and CLI."""
+    """Load the single shared configuration used by the plugin and CLI."""
     return _run_with_shared_config_path(lambda shared_config: shared_config.load_config())
 
 
 def save_config(config):
-    """Save through the shared configuration layer used by the Web UI."""
+    """Save through the shared configuration layer used by the plugin."""
     return _run_with_shared_config_path(
         lambda shared_config: shared_config.save_config(config)
     )
@@ -1013,7 +715,7 @@ def show_shared_settings_menu():
         sections = [(key, key) for key, value in sorted(config.items()) if isinstance(value, dict)]
         if any(not isinstance(value, dict) for value in config.values()):
             sections.insert(0, ("根级设置", None))
-        print(f"\n{Fore.CYAN}━━━ 全部设置（与网页端实时共用 config.json）━━━{Style.RESET_ALL}")
+        print(f"\n{Fore.CYAN}━━━ 全部设置（与插件共用 config.json）━━━{Style.RESET_ALL}")
         for index, (label, _) in enumerate(sections, 1):
             print(f"  {index:>2}. {label}")
         print("   0. 返回主菜单")
@@ -1061,7 +763,7 @@ def show_shared_settings_menu():
                 config.clear()
                 config.update(refreshed)
                 _reload_all_globals(config)
-                print(f"{Fore.GREEN}[OK] 已保存，网页端与命令端均会使用新值{Style.RESET_ALL}")
+                print(f"{Fore.GREEN}[OK] 已保存，插件与命令端均会使用新值{Style.RESET_ALL}")
             else:
                 print(f"{Fore.RED}[ERROR] 保存失败，未应用修改{Style.RESET_ALL}")
 
@@ -1118,7 +820,7 @@ def show_main_menu():
     {Fore.CYAN}B.{Style.RESET_ALL} 📊 后台任务 (查看后台异步任务状态)
     {Fore.RED}R.{Style.RESET_ALL} 🔄 恢复出厂设置 (输入 RESET 一次确认，清除全部用户数据)
     {Fore.YELLOW}S.{Style.RESET_ALL} 🛡️ 关键词审查开关 (当前: {'开启' if REPLY_SAFETY_ENABLED else '关闭'})
-    {Fore.LIGHTMAGENTA_EX}ALL.{Style.RESET_ALL} 全部设置（网页端和命令端共用）
+    {Fore.LIGHTMAGENTA_EX}ALL.{Style.RESET_ALL} 全部设置（插件和命令端共用）
     {Fore.LIGHTCYAN_EX}Q.{Style.RESET_ALL} ⚡ 快速模式 (跳过真人延迟): {Fore.GREEN + '已开启' + Style.RESET_ALL if NO_HUMAN_DELAY else Fore.YELLOW + '已关闭 (模拟真人)' + Style.RESET_ALL}
     {Fore.LIGHTCYAN_EX}Z.{Style.RESET_ALL} 🔇 安静模式 (精简日志): {Fore.GREEN + '已开启' + Style.RESET_ALL if QUIET_MODE else Fore.YELLOW + '已关闭' + Style.RESET_ALL}
     {Fore.GREEN}E.{Style.RESET_ALL} 📤 导出配置 (备份所有设置到一个文件)
@@ -1133,7 +835,6 @@ def show_main_menu():
     {Fore.YELLOW}X.{Style.RESET_ALL} 🪙 投币限制设置 (每日上限/评分阈值/概率/冷却)
     {Fore.CYAN}J.{Style.RESET_ALL} 🛠️ 学习工具 (📝 出题考试 | 🔬 深入了解 | 🤖 Agent | 🚀 多Agent协调)
     {Fore.MAGENTA}MM.{Style.RESET_ALL} 🧠 思维导图 (知识库/单视频 → 交互HTML)
-    {Fore.GREEN}WB.{Style.RESET_ALL} 🌐 打开网页端 (自动启动并打开浏览器)
     {Fore.RED}0.{Style.RESET_ALL} ❌ 退出程序
 
     {Fore.CYAN}当前配置状态:{Style.RESET_ALL}
@@ -1163,90 +864,8 @@ def show_main_menu():
     {Fore.CYAN}• 安静模式:{Style.RESET_ALL} {Fore.GREEN + "✓ 已开启" + Style.RESET_ALL if QUIET_MODE else Fore.LIGHTBLACK_EX + "💤 已关闭" + Style.RESET_ALL}
     {Fore.CYAN}• 省token模式:{Style.RESET_ALL} {Fore.GREEN + "💡 智能省token" + Style.RESET_ALL if config.get("system", {}).get("smart_token_mode", False) else Fore.YELLOW + "💤 未启用 (当前模式)" + Style.RESET_ALL}
     """)
-    print(f"    {Fore.LIGHTMAGENTA_EX}AR.{Style.RESET_ALL} AI behavior review settings (including desktop notifications)")
 
 
-@_cli_only
-def open_web_panel():
-    """打开网页端：若未运行则后台启动 web_panel.py，再打开浏览器。"""
-    import subprocess
-    import webbrowser
-    from ..utils.web_launcher import (
-        find_available_port,
-        get_web_port,
-        is_our_panel,
-        is_port_open,
-        panel_url,
-    )
-
-    port = get_web_port()
-    url = panel_url(port)
-
-    # 1) 若已在运行，直接打开浏览器
-    if is_our_panel(port):
-        print(f"{Fore.GREEN}[OK] 网页端已在运行: {url}{Style.RESET_ALL}")
-    else:
-        if is_port_open(port):
-            old_port = port
-            try:
-                port = find_available_port(port + 1)
-            except RuntimeError as e:
-                print(f"{Fore.RED}[ERROR] {e}{Style.RESET_ALL}")
-                return
-            url = panel_url(port)
-            print(f"{Fore.YELLOW}[WARN] 端口 {old_port} 已被其他程序占用，网页端改用 {port}{Style.RESET_ALL}")
-        # 2) 后台启动 web_panel.py（跳过终端免责确认）
-        print(f"{Fore.CYAN}[INFO] 网页端未运行，正在后台启动...{Style.RESET_ALL}")
-        base = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-        script = os.path.join(base, 'web_panel.py')
-        if not os.path.exists(script):
-            print(f"{Fore.RED}[ERROR] 找不到网页端脚本: {script}{Style.RESET_ALL}")
-            return
-        env = dict(os.environ)
-        env['BILI_DISCLAIMER_SKIP'] = '1'
-        env['BILI_WEB_AUTO_OPEN'] = '0'
-        env['BILI_BOT_AUTO_START'] = '0'
-        if env.get('BILI_PARENT_TRAY') == '1':
-            env['BILI_TRAY_DISABLED'] = '1'
-        env['WEB_PORT'] = str(port)
-        log_path = os.path.join(base, 'web_panel_stdout.log')
-        try:
-            with open(log_path, 'ab') as lf:
-                if os.name == 'nt':
-                    flags = subprocess.CREATE_NO_WINDOW | subprocess.CREATE_NEW_PROCESS_GROUP | subprocess.DETACHED_PROCESS
-                    proc = subprocess.Popen(
-                        [sys.executable, script],
-                        env=env, stdout=lf, stderr=subprocess.STDOUT,
-                        creationflags=flags,
-                    )
-                else:
-                    proc = subprocess.Popen(
-                        [sys.executable, script],
-                        env=env, stdout=lf, stderr=subprocess.STDOUT,
-                        start_new_session=True,
-                    )
-            print(f"{Fore.GREEN}[OK] 已启动网页端进程 (PID={proc.pid}){Style.RESET_ALL}")
-        except Exception as e:
-            print(f"{Fore.RED}[ERROR] 启动网页端失败: {e}{Style.RESET_ALL}")
-            return
-
-        # 3) 轮询等待端口就绪（最多约 20 秒）
-        ok = False
-        for _ in range(40):
-            time.sleep(0.5)
-            if is_our_panel(port):
-                ok = True
-                break
-        if not ok:
-            print(f"{Fore.YELLOW}[WARN] 等待超时，网页端可能仍在启动，请稍后手动打开 {url}{Style.RESET_ALL}")
-            return
-
-    # 4) 打开浏览器
-    try:
-        webbrowser.open(url)
-        print(f"{Fore.GREEN}[OK] 已在浏览器打开: {url}{Style.RESET_ALL}")
-    except Exception as e:
-        print(f"{Fore.YELLOW}[WARN] 无法自动打开浏览器，请手动访问 {url} ({e}){Style.RESET_ALL}")
 
 @_cli_only
 def show_mood_menu():
@@ -6228,7 +5847,7 @@ def quick_factory_reset_all():
     print(f"\n{Fore.RED}{'=' * 60}{Style.RESET_ALL}")
     print(f"{Fore.RED}  恢复出厂设置：彻底清除全部私人数据{Style.RESET_ALL}")
     print(f"{Fore.RED}{'=' * 60}{Style.RESET_ALL}")
-    print("将清除：API 配置和密钥、Cookie、二维码、网页账号/密码/恢复文件、")
+    print("将清除：API 配置和密钥、Cookie、二维码、")
     print("全部日志与审核记录、私信/评论/画像/日记/记忆、知识库，以及 HTML、")
     print("Word、PDF、PPT、思维导图等所有生成产物。已导出的备份默认保留。")
     print("程序源码、模板、依赖和启动脚本不会删除。")
@@ -6275,297 +5894,15 @@ def quick_factory_reset_all():
         result["failures"].append("默认配置写入失败")
     _reload_all_globals(config)
     print(f"\n{Fore.GREEN}[OK] 已清除 {len(result['deleted'])} 项私有数据与生成产物。{Style.RESET_ALL}")
-    print("下次使用需重新配置 AI、B站登录和网页端账号。")
+    print("下次使用需重新配置 AI、B站登录和操作权限。")
     if result["failures"]:
         print(f"{Fore.YELLOW}[WARN] 未能清除：{' ; '.join(result['failures'])}{Style.RESET_ALL}")
 
 
 @_cli_only
 def factory_reset_all():
-    """[LEGACY FACTORY RESET] 按类别逐一询问清除隐私数据，无数据的类别自动跳过"""
-    global config
-    import shutil as _shu
-    import glob as _glob
-
-    print(f"\n{Fore.RED}╔══════════════════════════════════════════════════╗{Style.RESET_ALL}")
-    print(f"{Fore.RED}║  🔄  隐私数据清理 — 按类别逐一确认              ║{Style.RESET_ALL}")
-    print(f"{Fore.RED}║  无数据的类别自动跳过，已清除的不可恢复         ║{Style.RESET_ALL}")
-    print(f"{Fore.RED}╚══════════════════════════════════════════════════╝{Style.RESET_ALL}")
-
-    html_dir = str(_SHARED_HTML_EXPORTS_DIR)
-    web_dir = os.path.join(BASE_DIR, "web")
-    qr_dir = str(_SHARED_QR_CODES_DIR)
-    mindmap_dir = str(_SHARED_MINDMAPS_DIR)
-
-    # ═══════════════════════════════════════════════════════════
-    # 定义清理分组：每组包含 (显示名称, [(描述, 路径), ...])
-    # ═══════════════════════════════════════════════════════════
-    groups = [
-        ("📍 登录凭证 (清除后需重新登录)",
-         [("登录Cookie", COOKIE_FILE),
-          ("运行时状态", RUNTIME_STATE_FILE),
-          ("机器人锁", BOT_LOCK_FILE),
-          ("加密密钥", CIPHER_KEY_FILE)]),
-
-        ("👤 用户画像与个人数据",
-         [("搜索记录", SEARCH_HISTORY_FILE),
-          ("兴趣配置", INTERESTS_FILE),
-          ("人设配置", PERSONAS_FILE),
-          ("用户画像", USER_PROFILES_FILE),
-          ("主人信息", os.path.join(DATA_DIR, "owner_profile.json")),
-          ("兴趣引擎数据", os.path.join(DATA_DIR, "interest_engine.json"))]),
-
-        ("💬 互动历史记录 (评论/私信/视频)",
-         [("评论日志", COMMENT_LOG_FILE),
-          ("私信日志", PRIVATE_MESSAGE_LOG_FILE),
-          ("私信上下文", PRIVATE_CONTEXT_FILE),
-          ("视频互动记录", HISTORY_VIDEOS_FILE)]),
-
-        ("🧠 机器人心智与记忆 (心情/日记/进化/Agent)",
-         [("心情状态", MOOD_STATE_FILE),
-          ("机器人日记", BOT_DIARY_FILE),
-          ("自我进化记录", SELF_EVOLUTION_FILE),
-          ("Agent技能日志", AGENT_SKILL_LOG_FILE),
-          ("学习日志", LEARNING_LOG_FILE),
-          ("UP主关注记忆", MEMORY_FILE),
-          ("机器人日志", JOURNAL_FILE),
-          ("知识库元数据", KB_METADATA_FILE)]),
-
-        ("🎭 心理画像系统",
-         [("心理画像", os.path.join(DATA_DIR, "psycho_profile.json")),
-          ("心理推荐日志", os.path.join(DATA_DIR, "recommendation_log.json")),
-          ("心理行为日志", os.path.join(DATA_DIR, "action_log.json")),
-          ("内容避雷", os.path.join(DATA_DIR, "content_aversions.json"))]),
-
-        ("🔍 向量检索索引",
-         [("向量检索索引", os.path.join(DATA_DIR, "kb_vector_index.json"))]),
-
-        ("📡 待机与监控数据",
-         [("待机配置", os.path.join(DATA_DIR, "standby_config.json")),
-          ("待机统计", os.path.join(DATA_DIR, "standby_stats.json")),
-          ("监控配置", os.path.join(DATA_DIR, "monitor_config.json")),
-          ("监控统计", os.path.join(DATA_DIR, "monitor_stats.json")),
-          ("评论区回复缓存", os.path.join(DATA_DIR, "reply_cache.json")),
-          ("评论已处理列表", os.path.join(DATA_DIR, "processed_comments.json"))]),
-
-        ("🌐 网页面板所有数据",
-         [("网页版Session密钥", os.path.join(DATA_DIR, ".web_secret_key")),
-          ("网页版人设", os.path.join(DATA_DIR, "web_personas.json")),
-          ("网页版活跃人设", os.path.join(DATA_DIR, "web_persona.json")),
-          ("网页版心情", os.path.join(DATA_DIR, "web_mood.json")),
-          ("网页版用户画像", os.path.join(DATA_DIR, "web_user_profiles.json")),
-          ("网页版操作日志", os.path.join(DATA_DIR, "web_action_log.json")),
-          ("网页版提示词模板", os.path.join(DATA_DIR, "web_prompt_templates.json")),
-          ("网页版费用记录", os.path.join(DATA_DIR, "web_costs.json"))]),
-
-        ("📂 知识库 (KnowledgeBase/)",
-         [("知识库全部内容", KNOWLEDGE_BASE_DIR)]),
-
-        ("📦 干货归档 (highlights/)",
-         [("干货全部内容", DRY_GOODS_DIR)]),
-
-        ("📤 所有导出文件",
-         [("HTML导出目录", html_dir),
-          ("Web导出目录", web_dir),
-          ("导出备份目录", BACKUP_DIR),
-          ("思维导图目录", mindmap_dir)]),
-
-        ("📄 Word/文档导出",
-         [("Word文档目录", str(_SHARED_WORD_DIR))]),
-
-        ("🗑️  缓存与临时文件",
-         [("Data/子目录 (video_cache/feedback等)", DATA_DIR + "/【子目录】"),  # 特殊标记
-          ("二维码临时文件", qr_dir),
-          ("根目录临时HTML", os.path.join(BASE_DIR, "web_explain_*.html")),  # glob模式
-          ("ID列表文件", os.path.join(BASE_DIR, "html_ids.txt")),
-          ("KB内嵌HTML缓存", os.path.join(KNOWLEDGE_BASE_DIR or "", ".html_exports"))]),
-    ]
-
-    # ═══════════════════════════════════════════════════════════
-    # 第一遍：逐个询问
-    # ═══════════════════════════════════════════════════════════
-    to_delete = {}  # group_index -> [(name, path), ...] 实际存在的文件
-
-    for gi, (group_name, items) in enumerate(groups):
-        # 检查该组是否有文件存在
-        existing = []
-        for name, path in items:
-            path = str(path)  # 兼容 Path 对象
-            if path.endswith("【子目录】"):
-                # Data/ 子目录：检查是否有子目录
-                dd = DATA_DIR
-                if os.path.isdir(dd):
-                    has_subdirs = any(
-                        os.path.isdir(os.path.join(dd, x)) for x in os.listdir(dd)
-                    )
-                    if has_subdirs:
-                        existing.append((name, path))
-            elif "*.html" in path:
-                # glob 模式
-                base, pattern = os.path.split(path)
-                matched = _glob.glob(os.path.join(base, pattern))
-                if matched:
-                    existing.append((name, path))
-            elif os.path.exists(path):
-                existing.append((name, path))
-
-        if not existing:
-            print(f"\n{Fore.LIGHTBLACK_EX}  [{group_name}] — 无数据，自动跳过{Style.RESET_ALL}")
-            continue
-
-        # 显示存在项列表
-        existing_names = [n for n, _ in existing]
-        print(f"\n{Fore.CYAN}  [{group_name}]{Style.RESET_ALL}")
-        print(f"  {Fore.WHITE}现有数据: {', '.join(existing_names)}{Style.RESET_ALL}")
-
-        answer = input(f"  {Fore.YELLOW}清除此项？[y/N]: {Style.RESET_ALL}").strip().lower()
-        if answer == 'y' or answer == 'yes':
-            to_delete[gi] = existing
-            print(f"  {Fore.GREEN}  → 已标记清除{Style.RESET_ALL}")
-        else:
-            print(f"  {Fore.LIGHTBLACK_EX}  → 保留{Style.RESET_ALL}")
-
-    # ═══════════════════════════════════════════════════════════
-    # 汇总确认
-    # ═══════════════════════════════════════════════════════════
-    if not to_delete:
-        print(f"\n{Fore.GREEN}没有选中任何需要清除的项目，操作已取消。{Style.RESET_ALL}")
-        return
-
-    print(f"\n{Fore.RED}{'─' * 50}{Style.RESET_ALL}")
-    print(f"{Fore.RED}📋 将要清除以下 {len(to_delete)} 类数据:{Style.RESET_ALL}")
-    total_files = 0
-    for gi, existing in to_delete.items():
-        group_name = groups[gi][0]
-        names = [n for n, _ in existing]
-        total_files += len(existing)
-        print(f"  {Fore.YELLOW}• {group_name}: {', '.join(names)}{Style.RESET_ALL}")
-    print(f"\n{Fore.RED}  共 {total_files} 项数据将被永久删除！{Style.RESET_ALL}")
-    print(f"{Fore.RED}{'─' * 50}{Style.RESET_ALL}")
-
-    confirm = input(f"\n{Fore.RED}确认执行清除？输入 YES 继续: {Style.RESET_ALL}").strip()
-    if confirm.upper() != "YES":
-        print(f"{Fore.YELLOW}已取消{Style.RESET_ALL}")
-        return
-
-    # ═══════════════════════════════════════════════════════════
-    # 执行删除
-    # ═══════════════════════════════════════════════════════════
-    deleted_count = 0
-
-    # ---- 辅助函数：安全删除文件 ----
-    def _safe_delete_file(path, label):
-        nonlocal deleted_count
-        if os.path.exists(path):
-            try:
-                os.remove(path)
-                print(f"  {Fore.GREEN}✓{Style.RESET_ALL} 已删除: {label}")
-                deleted_count += 1
-            except Exception as e:
-                print(f"  {Fore.RED}✗{Style.RESET_ALL} 删除失败: {label} - {e}")
-        else:
-            print(f"  {Fore.LIGHTBLACK_EX}- {label}: 不存在,跳过{Style.RESET_ALL}")
-
-    # ---- 辅助函数：安全删除目录 ----
-    def _safe_delete_dir(path, label):
-        nonlocal deleted_count
-        if os.path.exists(path):
-            try:
-                _shu.rmtree(path, ignore_errors=True)
-                print(f"  {Fore.GREEN}✓{Style.RESET_ALL} 已删除目录: {label}")
-                deleted_count += 1
-            except Exception as e:
-                print(f"  {Fore.RED}✗{Style.RESET_ALL} 删除目录失败: {label} - {e}")
-        else:
-            print(f"  {Fore.LIGHTBLACK_EX}- {label}: 不存在,跳过{Style.RESET_ALL}")
-
-    for gi, existing in sorted(to_delete.items()):
-        group_name = groups[gi][0]
-        print(f"\n{Fore.CYAN}── 正在清除: {group_name} ──{Style.RESET_ALL}")
-
-        for name, path in existing:
-            path = str(path)  # 兼容 Path 对象
-            if path.endswith("【子目录】"):
-                # Data/ 下所有子目录
-                dd = DATA_DIR
-                if os.path.isdir(dd):
-                    for item in os.listdir(dd):
-                        item_path = os.path.join(dd, item)
-                        if os.path.isdir(item_path):
-                            try:
-                                _shu.rmtree(item_path, ignore_errors=True)
-                                print(f"  {Fore.GREEN}✓{Style.RESET_ALL} 已删除: Data/{item}")
-                                deleted_count += 1
-                            except Exception as e:
-                                print(f"  {Fore.RED}✗{Style.RESET_ALL} 删除失败: Data/{item} - {e}")
-            elif "*.html" in path:
-                # glob 模式删除
-                base, pattern = os.path.split(path)
-                for f in _glob.glob(os.path.join(base, pattern)):
-                    try:
-                        os.remove(f)
-                        print(f"  {Fore.GREEN}✓{Style.RESET_ALL} 已删除: {os.path.basename(f)}")
-                        deleted_count += 1
-                    except Exception as e:
-                        print(f"  {Fore.RED}✗{Style.RESET_ALL} 删除失败: {f} - {e}")
-            elif os.path.isdir(path):
-                _safe_delete_dir(path, name)
-            elif path in (KNOWLEDGE_BASE_DIR, DRY_GOODS_DIR, html_dir, web_dir,
-                          BACKUP_DIR, mindmap_dir,
-                          str(_SHARED_WORD_DIR)):
-                # 已经是目录，前面 isdir 会处理
-                _safe_delete_dir(path, name)
-            else:
-                _safe_delete_file(path, name)
-
-    # ═══════════════════════════════════════════════════════════
-    # 额外清理 (用户确认过但需特殊处理的)
-    # ═══════════════════════════════════════════════════════════
-    # 二维码目录：清空而非删除
-    if any(n == "二维码临时文件" for gi, ex in to_delete.items() for n, _ in ex):
-        if os.path.exists(qr_dir):
-            try:
-                _shu.rmtree(qr_dir, ignore_errors=True)
-                os.makedirs(qr_dir, exist_ok=True)
-                print(f"  {Fore.GREEN}✓{Style.RESET_ALL} 已清空: qr_codes/")
-                deleted_count += 1
-            except Exception as e:
-                print(f"  {Fore.RED}✗{Style.RESET_ALL} 清理 qr_codes 失败: {e}")
-
-    # ID列表文件 (html_ids.txt / js_ids.txt)
-    if any(n == "ID列表文件" for gi, ex in to_delete.items() for n, _ in ex):
-        for id_file in ("html_ids.txt", "js_ids.txt"):
-            id_path = os.path.join(BASE_DIR, id_file)
-            _safe_delete_file(id_path, id_file)
-
-    # KB内嵌HTML缓存
-    if any(n == "KB内嵌HTML缓存" for gi, ex in to_delete.items() for n, _ in ex):
-        kb_html_dir = os.path.join(KNOWLEDGE_BASE_DIR, ".html_exports") if KNOWLEDGE_BASE_DIR else None
-        if kb_html_dir:
-            _safe_delete_dir(kb_html_dir, "KnowledgeBase/.html_exports/")
-
-    # Word文档自定义目录
-    if any(n == "Word文档目录" for gi, ex in to_delete.items() for n, _ in ex):
-        try:
-            _de = config.get("document_export", {}) if isinstance(config, dict) else {}
-            _custom = _de.get("output_dir") or _de.get("folder_name")
-            if _custom:
-                _custom_path = os.path.join(BASE_DIR, _custom)
-                _safe_delete_dir(_custom_path, f"自定义文档目录 ({_custom}/)")
-        except Exception:
-            pass
-
-    # ═══════════════════════════════════════════════════════════
-    # 最后：重新生成默认配置文件
-    # ═══════════════════════════════════════════════════════════
-    config = DEFAULT_CONFIG.copy()
-    save_config(config)
-    _reload_all_globals(config)
-
-    print(f"\n{Fore.GREEN}════════════════════════════════════════════════{Style.RESET_ALL}")
-    print(f"{Fore.GREEN}[OK] 隐私数据清理完成！已清除 {deleted_count} 项，配置已恢复默认{Style.RESET_ALL}")
-    print(f"{Fore.GREEN}════════════════════════════════════════════════{Style.RESET_ALL}")
-    input(f"\n{Fore.CYAN}按回车继续...{Style.RESET_ALL}")
+    """保留旧菜单入口，复用当前数据根内的显式确认清理。"""
+    return quick_factory_reset_all()
 
 
 @_cli_only

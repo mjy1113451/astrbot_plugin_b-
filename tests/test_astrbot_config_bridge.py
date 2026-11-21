@@ -140,6 +140,7 @@ class AstrBotConfigBridgeTests(unittest.TestCase):
         self.user_data = importlib.import_module(user_data.__name__)
         self.cfg = importlib.import_module(f"{PACKAGE}.core.config")
         self.bridge = importlib.import_module(f"{PACKAGE}.core.astrbot_config_bridge")
+        self.permissions = importlib.import_module(f"{PACKAGE}.core.action_permissions")
         self.initial = copy.deepcopy(self.cfg.config)
         self.config_reference = self.cfg.config
 
@@ -152,6 +153,161 @@ class AstrBotConfigBridgeTests(unittest.TestCase):
 
     def assert_disk_untouched(self):
         self.assertEqual(self.path.read_bytes(), self.original_bytes)
+
+    def test_permission_defaults_match_shared_definitions_without_import_time_writes(self):
+        expected = self.permissions.defaults()
+        self.assertEqual(self.cfg.DEFAULT_CONFIG["ai_permissions"], expected)
+        self.assertEqual(self.cfg.config["ai_permissions"], expected)
+        self.assertIsNot(self.cfg.DEFAULT_CONFIG["ai_permissions"], expected)
+        self.assertIsNot(self.cfg.config["ai_permissions"]["actions"],
+                         self.cfg.DEFAULT_CONFIG["ai_permissions"]["actions"])
+        self.assert_disk_untouched()
+        self.assertEqual(list(self.path.parent.iterdir()), [self.path])
+        self.assertFalse(Path(self.cfg.CIPHER_KEY_FILE).exists())
+        self.assertFalse(Path(self.cfg.KNOWLEDGE_BASE_DIR).exists())
+
+    def test_defaults_drop_dead_ui_fields_but_keep_provider_menu_and_proxy(self):
+        for section in ("project_info", "model_presets", "browser_extension"):
+            self.assertNotIn(section, self.cfg.DEFAULT_CONFIG)
+        self.assertEqual(self.cfg.DEFAULT_CONFIG["platform_adapter"], {"proxy": ""})
+        self.assertEqual(self.cfg.DEFAULT_CONFIG["active_preset"], "")
+        self.assertIn("openai", self.cfg.PROVIDER_PRESETS)
+        self.assertTrue(self.cfg.PROVIDER_PRESETS["openai"]["base_url"])
+
+    def test_schema_leaf_defaults_and_types_match_business_defaults(self):
+        schema = json.loads(self.bridge.SCHEMA_PATH.read_text(encoding="utf-8"))
+        types = {"bool": bool, "int": int, "float": (float, int),
+                 "string": str, "text": str, "list": list}
+
+        def check(nodes, defaults, path=()):
+            for key, node in nodes.items():
+                field = path + (key,)
+                with self.subTest(field=".".join(field)):
+                    self.assertIn(key, defaults)
+                    value = defaults[key]
+                    if node["type"] == "object":
+                        self.assertIsInstance(value, dict)
+                        self.assertIn("items", node)
+                        check(node["items"], value, field)
+                    else:
+                        self.assertIsInstance(node["default"], types[node["type"]])
+                        self.assertIsInstance(value, types[node["type"]])
+                        if node["type"] != "bool":
+                            self.assertNotIsInstance(node["default"], bool)
+                            self.assertNotIsInstance(value, bool)
+                        self.assertEqual(value, node["default"])
+
+        check({key: node for key, node in schema.items()
+               if key not in {"use_astrbot_config", "apply_sections"}}, self.cfg.DEFAULT_CONFIG)
+
+    def test_read_and_panel_updates_preserve_existing_unknown_and_retired_groups(self):
+        legacy = {
+            "project_info": {"name": "custom-project"},
+            "model_presets": {"custom": {"model": "preserve"}},
+            "browser_extension": {"enabled": True, "port": 12345},
+            "platform_adapter": {"proxy": "http://proxy.invalid:8080", "ui_platforms": ["custom"]},
+        }
+        updated = {**self.disk_config, **legacy}
+        self.path.write_text(json.dumps(updated), encoding="utf-8")
+        disk = self.path.read_bytes()
+        loaded = self.cfg.load_config()
+        for key, value in legacy.items():
+            self.assertEqual(loaded[key], value)
+        self.assertEqual(self.path.read_bytes(), disk)
+        self.apply(["api"], api={"model_brain": "panel"})
+        for config in (self.cfg.config, self.read_disk(), self.cfg.load_config()):
+            for key, value in legacy.items():
+                self.assertEqual(config[key], value)
+            self.assertEqual(config["legacy_section"], self.disk_config["legacy_section"])
+
+    def test_permission_panel_requires_both_opt_in_and_explicit_group_selection(self):
+        permission = {"enabled": True, "actions": {"coin": True}}
+        for panel in (
+            {"use_astrbot_config": False, "apply_sections": ["ai_permissions"]},
+            {"use_astrbot_config": True},
+            {"use_astrbot_config": True, "apply_sections": []},
+        ):
+            with self.subTest(panel=panel):
+                self.bridge.apply_astrbot_config({**panel, "ai_permissions": permission})
+                self.assertEqual(self.cfg.config["ai_permissions"], self.permissions.defaults())
+                self.assert_disk_untouched()
+        self.apply(["api"], api={"model_brain": "selected"}, ai_permissions=permission)
+        self.assertEqual(self.cfg.config["ai_permissions"], self.permissions.defaults())
+        self.assertNotIn("ai_permissions", self.read_disk())
+        self.apply(["ai_permissions"], ai_permissions=permission)
+        self.assertTrue(self.permissions.allowed("coin", self.cfg.config))
+        self.assertFalse(self.permissions.allowed("video_like", self.cfg.config))
+        self.assertEqual(self.cfg.config["approval_review"], self.initial["approval_review"])
+        self.assertEqual(self.cfg.config["reply_safety"], self.initial["reply_safety"])
+
+    def test_permission_master_and_individual_action_values_are_preserved(self):
+        for action in self.permissions.ACTIONS:
+            with self.subTest(action=action):
+                permission = self.permissions.defaults()
+                permission["enabled"] = True
+                permission["actions"][action] = True
+                self.apply(["ai_permissions"], ai_permissions=permission)
+                for config in (self.cfg.config, self.read_disk(), self.cfg.load_config()):
+                    self.assertEqual(config["ai_permissions"], permission)
+                    for candidate in self.permissions.ACTIONS:
+                        self.assertIs(self.permissions.allowed(candidate, config), candidate == action)
+                permission["enabled"] = False
+                self.apply(["ai_permissions"], ai_permissions=permission)
+                self.assertFalse(self.permissions.allowed(action, self.cfg.config))
+                self.assertIs(self.read_disk()["ai_permissions"]["actions"][action], True)
+
+    def test_permission_fields_reject_every_non_boolean_atomically(self):
+        cases = [None, [], "invalid", {"actions": None}, {"actions": []}]
+        for value in (None, 0, 1, "true", "false", {}, []):
+            cases.append({"enabled": value})
+            cases.extend({"enabled": True, "actions": {action: value}}
+                         for action in self.permissions.ACTIONS)
+        for permission in cases:
+            with self.subTest(permission=permission):
+                with patch.object(self.cfg, "save_config", wraps=self.cfg.save_config) as save:
+                    with self.assertRaises(TypeError):
+                        self.apply(["api", "ai_permissions"], api={"model_brain": "must-not-write"},
+                                   ai_permissions=permission)
+                save.assert_not_called()
+                self.assertEqual(self.cfg.config, self.initial)
+                self.assert_disk_untouched()
+
+    def test_unknown_permission_keys_are_not_written(self):
+        self.apply(["ai_permissions"], ai_permissions={
+            "enabled": True, "unknown": True,
+            "actions": {"coin": True, "unknown": True, "knowledge_write": True},
+        })
+        for config in (self.cfg.config, self.read_disk()):
+            permission = config["ai_permissions"]
+            self.assertNotIn("unknown", permission)
+            self.assertNotIn("unknown", permission["actions"])
+            self.assertNotIn("knowledge_write", permission["actions"])
+            self.assertTrue(self.permissions.allowed("coin", config))
+
+    def test_corrupt_existing_configs_abort_before_initialization_or_panel_write(self):
+        panels = (
+            {"use_astrbot_config": False},
+            {"use_astrbot_config": True, "apply_sections": []},
+            {"use_astrbot_config": True, "apply_sections": ["ai_permissions"],
+             "ai_permissions": {"enabled": True, "actions": {"coin": True}}},
+        )
+        for raw in ("{invalid", "[]", "null", '{"api": []}', '{"api": null}',
+                    '{"fallback_provider": []}'):
+            with self.subTest(raw=raw):
+                self.path.write_text(raw, encoding="utf-8")
+                before = self.path.read_bytes()
+                with patch.object(self.cfg, "save_config", wraps=self.cfg.save_config) as save, \
+                        patch.object(self.cfg, "ensure_user_data_dir") as ensure:
+                    with self.assertRaises((ValueError, TypeError, AttributeError)):
+                        self.cfg.initialize_config()
+                    for panel in panels:
+                        with self.assertRaises((ValueError, TypeError, AttributeError)):
+                            self.bridge.apply_astrbot_config(panel)
+                save.assert_not_called()
+                ensure.assert_not_called()
+                self.assertEqual(self.path.read_bytes(), before)
+                self.assertIs(self.cfg.config, self.config_reference)
+                self.assertEqual(self.cfg.config, self.initial)
 
     def test_disabled_or_missing_switch_preserves_existing_file_and_config(self):
         for mapping in ({"use_astrbot_config": False, "api": {"model_brain": "ignored"}},
@@ -168,6 +324,7 @@ class AstrBotConfigBridgeTests(unittest.TestCase):
         cli.app = app
         app.config = copy.deepcopy(self.initial)
         cli_reference = app.config
+        app._reload_all_globals = Mock()
         guard_module = importlib.import_module(f"{PACKAGE}.security.guard")
         updated = copy.deepcopy(self.disk_config)
         updated["api"]["model_brain"] = "changed-on-disk"
@@ -190,6 +347,8 @@ class AstrBotConfigBridgeTests(unittest.TestCase):
             self.assertEqual(config["api"]["model_brain"], "changed-on-disk")
             self.assertEqual(config["prompt_injection"]["custom_terms"], ["fresh-disk-term"])
         self.assertTrue(guard_module.ReplySafetyGuard().detect_injection("fresh-disk-term")[0])
+        app._reload_all_globals.assert_called_once_with(cli_reference)
+        self.assertIs(app._reload_all_globals.call_args.args[0], cli_reference)
 
     def test_disabled_with_missing_config_does_not_write(self):
         self.path.unlink()
@@ -365,9 +524,12 @@ class AstrBotConfigBridgeTests(unittest.TestCase):
     def test_config_sync_handles_aliased_shared_and_cli_dictionaries(self):
         cli = ModuleType(f"{PACKAGE}.cli.app")
         cli.config = self.cfg.config
+        cli._reload_all_globals = Mock()
         before = copy.deepcopy(self.cfg.config)
         with patch.dict(sys.modules, {cli.__name__: cli}):
             self.bridge._sync_loaded_config(self.cfg, self.cfg.config)
+        cli._reload_all_globals.assert_called_once_with(self.config_reference)
+        self.assertIs(cli._reload_all_globals.call_args.args[0], self.config_reference)
         self.assertIs(cli.config, self.cfg.config)
         self.assertEqual(self.cfg.config, before)
         self.assertIs(self.cfg.config, self.config_reference)
@@ -428,13 +590,28 @@ class AstrBotConfigBridgeTests(unittest.TestCase):
         cli.app = app
         app.config = copy.deepcopy(self.initial)
         reference = app.config
+
+        def reload_globals(config):
+            self.assertIs(config, reference)
+            self.assertEqual(self.cfg.config, config)
+            app.MODEL_BRAIN = config["api"]["model_brain"]
+
+        app._reload_all_globals = Mock(side_effect=reload_globals)
         with patch.dict(sys.modules, {cli.__name__: cli, app.__name__: app}):
             self.apply(["api"], api={"model_brain": "panel"})
             self.assertIs(app.config, reference)
             self.assertEqual(reference["api"]["model_brain"], "panel")
-            self.bridge.apply_astrbot_config({"use_astrbot_config": False})
-            self.assertIs(app.config, reference)
-            self.assertEqual(reference["api"]["model_brain"], "panel")
+            app._reload_all_globals.assert_called_once_with(reference)
+            self.assertEqual(app.MODEL_BRAIN, "panel")
+            for panel in ({"use_astrbot_config": False},
+                          {"use_astrbot_config": True, "apply_sections": []}):
+                app._reload_all_globals.reset_mock()
+                app.MODEL_BRAIN = "stale-global"
+                self.bridge.apply_astrbot_config(panel)
+                self.assertIs(app.config, reference)
+                self.assertEqual(reference["api"]["model_brain"], "panel")
+                app._reload_all_globals.assert_called_once_with(reference)
+                self.assertEqual(app.MODEL_BRAIN, "panel")
 
     def test_consumer_imported_before_change_reads_current_config(self):
         guard_module = importlib.import_module(f"{PACKAGE}.security.guard")

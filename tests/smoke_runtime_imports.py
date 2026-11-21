@@ -146,4 +146,27 @@ with tempfile.TemporaryDirectory(prefix="bili-import-readonly-") as temporary, E
     assert config_file.read_bytes() == saved
     if STATE == "existing":
         assert config_file.read_bytes() == before[Path("Data/config.json")]
-    print(f"PASS: real {MODE} business import ({STATE} profile) is read-only; explicit initialization and shared references work.")
+
+    permissions = importlib.import_module(prefix + ".core.action_permissions")
+    bridge = importlib.import_module(prefix + ".core.astrbot_config_bridge")
+    assert cli.DEFAULT_CONFIG is not core.DEFAULT_CONFIG
+    assert cli.DEFAULT_CONFIG["ai_permissions"] is not core.DEFAULT_CONFIG["ai_permissions"]
+    assert not permissions.allowed("video_like")
+    with patch.object(cli, "_reload_all_globals", wraps=cli._reload_all_globals) as reload_globals:
+        bridge.apply_astrbot_config({
+            "use_astrbot_config": True, "apply_sections": ["ai_permissions"],
+            "ai_permissions": {"enabled": True, "actions": {"video_like": True}},
+        })
+        reload_globals.assert_called_once_with(cli.config)
+    assert permissions.allowed("video_like")
+    assert not permissions.allowed("coin")
+    assert cli.config["ai_permissions"] == core.config["ai_permissions"]
+    bridge.apply_astrbot_config({
+        "use_astrbot_config": True, "apply_sections": ["ai_permissions"],
+        "ai_permissions": {"enabled": False},
+    })
+    assert not permissions.allowed("video_like")
+    assert core.config is config_reference and cli.config is cli_reference
+    assert core.config["api"]["model_brain"] == expected_model
+    assert sys.path == original_path
+    print(f"PASS: real {MODE} business import ({STATE} profile) is read-only; explicit initialization, shared references and live permissions work.")

@@ -5,7 +5,7 @@
     "default": false
   },
   "apply_sections": {
-    "description": "要应用的配置组名称列表；留空不修改旧配置，选中组的全部面板值会覆盖原值",
+    "description": "要应用的配置组名称列表；留空不修改旧配置，选中组的全部面板值会覆盖原值；应用 AI 操作权限需明确添加 ai_permissions",
     "type": "list",
     "default": []
   },
@@ -201,6 +201,75 @@
         "description": "字幕充足时分析帧",
         "type": "bool",
         "default": false
+      }
+    }
+  },
+  "ai_permissions": {
+    "description": "AI 平台操作权限（默认全部关闭）",
+    "hint": "总开关不会自动授权任何操作，必须同时逐项开启所需权限；审批复核不等于操作授权。需启用面板配置并在 apply_sections 中明确选择 ai_permissions 才会应用。",
+    "type": "object",
+    "items": {
+      "enabled": {
+        "description": "启用 AI 平台操作权限总开关",
+        "hint": "总开关不会自动授权任何操作；只有逐项开启的操作才可能执行。",
+        "type": "bool",
+        "default": false
+      },
+      "actions": {
+        "description": "逐项授权平台写入操作（仍受总开关限制）",
+        "type": "object",
+        "items": {
+          "video_like": {
+            "description": "视频点赞",
+            "type": "bool",
+            "default": false
+          },
+          "coin": {
+            "description": "投币",
+            "type": "bool",
+            "default": false
+          },
+          "favorite": {
+            "description": "平台收藏",
+            "type": "bool",
+            "default": false
+          },
+          "follow_up": {
+            "description": "关注 UP 主",
+            "type": "bool",
+            "default": false
+          },
+          "unfollow_user": {
+            "description": "取消关注",
+            "type": "bool",
+            "default": false
+          },
+          "public_comment": {
+            "description": "公开评论与回复",
+            "type": "bool",
+            "default": false
+          },
+          "comment_like": {
+            "description": "评论点赞",
+            "type": "bool",
+            "default": false
+          },
+          "private_reply": {
+            "description": "发送私信",
+            "type": "bool",
+            "default": false
+          },
+          "send_danmaku": {
+            "description": "发送弹幕",
+            "type": "bool",
+            "default": false
+          },
+          "danmaku_like": {
+            "description": "弹幕点赞",
+            "type": "bool",
+            "default": false
+          }
+        }
       }
     }
   },
