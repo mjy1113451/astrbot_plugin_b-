@@ -261,6 +261,24 @@ def save_config(config):
 config = load_config()
 
 
+def _show_cli_permissions(current_config, actions=None):
+    """Show permission separately from candidate strategy without modifying configuration."""
+    if _runtime.plugin_mode:
+        return
+    from ..core.action_permissions import ACTIONS, allowed
+
+    selected = ACTIONS if actions is None else actions
+    current_config = current_config if isinstance(current_config, dict) else {}
+    print("\n[权限] ai_permissions 总开关及对应动作开关是平台写操作的唯一授权来源。")
+    print("旧自动化开关、概率、阈值、限额只控制候选行为，不能授权执行；人工审批也不构成授权。")
+    print("升级/导入旧配置不会自动授权；已授权也仍受现有策略、安全规则和审批要求约束。")
+    print("请在 ALL → ai_permissions 中显式设置总开关和所需 actions；不要用旧开关代替授权。")
+    for action in selected:
+        if action in ACTIONS:
+            state = "已授权" if allowed(action, current_config) else "未授权"
+            print(f"  {ACTIONS[action]}: {state}")
+
+
 def initialize_cli():
     """显式准备独立 CLI 的配置、目录和终端，而不是在 import 时修改宿主。"""
     updated = _run_with_shared_config_path(lambda shared_config: shared_config.initialize_config())
@@ -269,6 +287,7 @@ def initialize_cli():
         config.update(updated)
     _reload_all_globals(config)
     _initialize_cli_terminal()
+    _show_cli_permissions(config)
 
 
 def get_bot_name():
@@ -712,6 +731,7 @@ def show_shared_settings_menu():
         latest = load_config()
         config.clear()
         config.update(latest)
+        _show_cli_permissions(config)
         sections = [(key, key) for key, value in sorted(config.items()) if isinstance(value, dict)]
         if any(not isinstance(value, dict) for value in config.values()):
             sections.insert(0, ("根级设置", None))
@@ -763,6 +783,7 @@ def show_shared_settings_menu():
                 config.clear()
                 config.update(refreshed)
                 _reload_all_globals(config)
+                _show_cli_permissions(config)
                 print(f"{Fore.GREEN}[OK] 已保存，插件与命令端均会使用新值{Style.RESET_ALL}")
             else:
                 print(f"{Fore.RED}[ERROR] 保存失败，未应用修改{Style.RESET_ALL}")
@@ -777,7 +798,7 @@ def show_main_menu():
     interest_mgr = InterestManager()
     interest_count = len(interest_mgr.get_interests())
     
-    comment_mode_text = "真实评论" if COMMENT_MODE == "real" else "模拟评论"
+    comment_mode_text = "真实模式候选（仍须授权）" if COMMENT_MODE == "real" else "模拟评论（不发送）"
     session_parts = []
     if SESSION_MAX_DURATION_MINUTES > 0:
         session_parts.append(f"{SESSION_MAX_DURATION_MINUTES}分钟")
@@ -843,21 +864,21 @@ def show_main_menu():
     • 知识库: {Fore.GREEN + "✓ 已启用" + Style.RESET_ALL if os.path.exists(KNOWLEDGE_BASE_DIR) else Fore.YELLOW + "[FILE] 待创建" + Style.RESET_ALL}
     • 干货归档: {Fore.GREEN + f"✓ 已启用 (≥{DRY_GOODS_MIN_SCORE}分)" + Style.RESET_ALL if DRY_GOODS_ENABLED else Fore.YELLOW + "💤 未启用" + Style.RESET_ALL}
     • 兴趣爱好: {Fore.GREEN + f"✓ {interest_count}个" + Style.RESET_ALL if interest_count > 0 else Fore.YELLOW + "[WARN] 未设置" + Style.RESET_ALL}
-    • 评论互动: {Fore.GREEN + "✓ " + comment_mode_text + Style.RESET_ALL if PROB_COMMENT_OTHERS > 0 else Fore.YELLOW + "[WARN] 未启用" + Style.RESET_ALL}
-    • 私信处理: {Fore.GREEN + ("✓ 自动回复" if PRIVATE_MESSAGE_AUTO_REPLY else "✓ 只拟回复") + Style.RESET_ALL if PRIVATE_MESSAGE_ENABLED else Fore.YELLOW + "[WARN] 未启用" + Style.RESET_ALL}
+    • 评论候选策略: {Fore.GREEN + "✓ " + comment_mode_text + Style.RESET_ALL if PROB_COMMENT_OTHERS > 0 else Fore.YELLOW + "[WARN] 未启用" + Style.RESET_ALL}
+    • 私信检查/候选策略: {Fore.GREEN + ("✓ 自动回复候选（仍须授权）" if PRIVATE_MESSAGE_AUTO_REPLY else "✓ 只拟回复") + Style.RESET_ALL if PRIVATE_MESSAGE_ENABLED else Fore.YELLOW + "[WARN] 未启用" + Style.RESET_ALL}
     • 视频探索: {Fore.GREEN + ("✓ 自动" if AGENT_AUTO_ENABLED else "✓ 手动") + Style.RESET_ALL if AGENT_ENABLED else Fore.YELLOW + "[WARN] 未启用" + Style.RESET_ALL}
     • Agent深度搜索: {Fore.GREEN + "🤖 集成刷视频" + Style.RESET_ALL if AGENT_ENABLED and AGENT_DIVE_ENABLED else Fore.YELLOW + "💤 未开启" + Style.RESET_ALL}
     • 语音识别(ASR): {Fore.GREEN + f"[ASR] {ASR_BACKEND.upper()}" + Style.RESET_ALL if ASR_ENABLED else Fore.YELLOW + "🔇 未启用" + Style.RESET_ALL}
     • 封面分析: {Fore.GREEN + "✓ 已开启" + Style.RESET_ALL if VISION_COVER_ENABLED else Fore.YELLOW + "⏸️ 已关闭(刷视频更快)" + Style.RESET_ALL}
     • 复习回顾: {Fore.GREEN + f"📖 已启用 (≥{REVISIT_MIN_SCORE}分)" + Style.RESET_ALL if REVISIT_ENABLED else Fore.YELLOW + "💤 未开启" + Style.RESET_ALL}
     • 会话限制: {Fore.GREEN + session_summary + Style.RESET_ALL}
-    • UP主关注: {Fore.GREEN + "[*] 已开启" + Style.RESET_ALL if UP_FOLLOW_ENABLED else Fore.YELLOW + "💤 未开启" + Style.RESET_ALL}
-    • 弹幕互动: {Fore.GREEN + "[MSG] 已开启" + Style.RESET_ALL if DANMAKU_ENABLED else Fore.YELLOW + "💤 未开启" + Style.RESET_ALL}
+    • UP主关注候选策略: {Fore.GREEN + "[*] 已开启" + Style.RESET_ALL if UP_FOLLOW_ENABLED else Fore.YELLOW + "💤 未开启" + Style.RESET_ALL}
+    • 弹幕读取/候选策略: {Fore.GREEN + "[MSG] 已开启" + Style.RESET_ALL if DANMAKU_ENABLED else Fore.YELLOW + "💤 未开启" + Style.RESET_ALL}
     • 关键词审查: {Fore.GREEN + "🛡 已启用" + Style.RESET_ALL if REPLY_SAFETY_ENABLED else Fore.YELLOW + "⚠ 已关闭" + Style.RESET_ALL}
     • 快速模式: {Fore.GREEN + "⚡ 已开启 (跳过延迟)" + Style.RESET_ALL if NO_HUMAN_DELAY else Fore.YELLOW + "🐢 已关闭 (模拟真人)" + Style.RESET_ALL}
     • 备用API: {Fore.GREEN + "[REFRESH] " + FALLBACK_PROVIDER_NAME + "(" + (FALLBACK_PROVIDER_MODELS.get('chat','') or '?') + "/" + (FALLBACK_PROVIDER_MODELS.get('vision','') or '?') + ")" + Style.RESET_ALL if FALLBACK_PROVIDER_ENABLED else Fore.YELLOW + "💤 未启用" + Style.RESET_ALL}
     • 随机数限制: {Fore.GREEN + "🎲 已开启 (随机检定)" + Style.RESET_ALL if RANDOM_ENABLED else Fore.YELLOW + "🔒 已关闭 (纯分数)" + Style.RESET_ALL}
-    • 投币限制: {Fore.GREEN}上限{MAX_COINS_DAILY}枚/天 | 阈值≥{COIN_THRESHOLD}分 | 概率{int(PROB_COIN*100)}%{(" | 冷却" + str(int(config.get("interaction", {}).get("coin_cooldown_minutes", 0))) + "分" if config.get("interaction", {}).get("coin_cooldown_minutes", 0) > 0 else "")}{(" | ≤" + str(int(config.get("interaction", {}).get("coin_max_per_hour", 0))) + "枚/时" if config.get("interaction", {}).get("coin_max_per_hour", 0) > 0 else "")}{Style.RESET_ALL}
+    • 投币候选条件: {Fore.GREEN}上限{MAX_COINS_DAILY}枚/天 | 阈值≥{COIN_THRESHOLD}分 | 概率{int(PROB_COIN*100)}%{(" | 冷却" + str(int(config.get("interaction", {}).get("coin_cooldown_minutes", 0))) + "分" if config.get("interaction", {}).get("coin_cooldown_minutes", 0) > 0 else "")}{(" | ≤" + str(int(config.get("interaction", {}).get("coin_max_per_hour", 0))) + "枚/时" if config.get("interaction", {}).get("coin_max_per_hour", 0) > 0 else "")}{Style.RESET_ALL}
     • AI心情: {Fore.GREEN + ("🤖 随机心情" if MOOD_RANDOM_ENABLED else ("✏️ 自定义: " + MOOD_CUSTOM_VALUE if MOOD_CUSTOM_ENABLED and MOOD_CUSTOM_VALUE else "⚙️ 默认")) + Style.RESET_ALL}
 
     {Fore.CYAN}• 字幕严格校验:{Style.RESET_ALL} {Fore.GREEN + "✓ 已启用" + Style.RESET_ALL if SUBTITLE_STRICT_CHECK else Fore.LIGHTBLACK_EX + "💤 已关闭(默认)" + Style.RESET_ALL}
@@ -2406,7 +2427,8 @@ def configure_session_params():
 def configure_interaction_params():
     global PROB_COMMENT_OTHERS, COMMENT_CHECK_INTERVAL, PROB_REPLY_TRIGGER, PROB_COIN, PROB_FAV, PROB_LIKE_SOLO, COMMENT_CHECK_ENABLED, PRIVATE_MESSAGE_ENABLED, RANDOM_ENABLED
     
-    print(f"\n{Fore.CYAN}互动参数配置{Style.RESET_ALL}")
+    _show_cli_permissions(config, ("video_like", "coin", "favorite", "public_comment", "comment_like", "private_reply"))
+    print(f"\n{Fore.CYAN}互动候选策略配置（不构成操作授权）{Style.RESET_ALL}")
     print(f"当前投币阈值: {COIN_THRESHOLD}")
     try:
         new_value = float(input(f"{Fore.YELLOW}请输入新的投币阈值 (0-10, 直接回车保持原样): {Style.RESET_ALL}").strip())
@@ -2480,7 +2502,7 @@ def configure_interaction_params():
         print(f"{Fore.GREEN}[OK] 评论检查已{'启用' if COMMENT_CHECK_ENABLED else '关闭'}!{Style.RESET_ALL}")
 
     print(f"\n当前随机数限制: {'🎲 已开启' if RANDOM_ENABLED else '🔒 已关闭'}")
-    print(f"  {'开启时：AI意图需通过随机概率检定才执行（更自然、更像真人）' if RANDOM_ENABLED else '关闭时：只看AI意图和分数阈值，跳过随机检定（更激进）'}")
+    print(f"  {'开启时：AI意图通过随机检定仅生成候选，执行仍须 ai_permissions 授权' if RANDOM_ENABLED else '关闭时：仅跳过候选随机检定，执行仍须 ai_permissions 授权'}")
     toggle_rand = input(f"{Fore.YELLOW}切换？(y=切换, 直接回车保持): {Style.RESET_ALL}").strip().lower()
     if toggle_rand == 'y':
         RANDOM_ENABLED = not RANDOM_ENABLED
@@ -2504,7 +2526,7 @@ def show_coin_settings_menu():
     global MAX_COINS_DAILY, COIN_THRESHOLD, PROB_COIN
     
     while True:
-        # 实时读取配置（防止并发修改）
+        _show_cli_permissions(config, ("coin",))
         coin_cfg = config.get("interaction", {})
         max_daily = coin_cfg.get("max_coins_daily", 2)
         threshold = coin_cfg.get("coin_threshold", 8.0)
@@ -2520,7 +2542,7 @@ def show_coin_settings_menu():
     {Fore.CYAN}当前投币配置:{Style.RESET_ALL}
     {Fore.YELLOW}1.{Style.RESET_ALL} 每日投币上限: {Fore.GREEN}{max_daily} 枚/天{Style.RESET_ALL}{' (不限)' if max_daily <= 0 else ''}
     {Fore.YELLOW}2.{Style.RESET_ALL} 投币评分阈值: {Fore.GREEN}{threshold} 分{Style.RESET_ALL} (视频≥此分才考虑投币)
-    {Fore.YELLOW}3.{Style.RESET_ALL} 投币概率检定: {Fore.GREEN}{int(prob*100)}%{Style.RESET_ALL} (随机数通过才投币)
+    {Fore.YELLOW}3.{Style.RESET_ALL} 投币概率检定: {Fore.GREEN}{int(prob*100)}%{Style.RESET_ALL} (仅候选筛选，不构成投币授权)
     {Fore.YELLOW}4.{Style.RESET_ALL} 投币冷却时间: {Fore.GREEN}{cooldown_mins} 分钟{Style.RESET_ALL}{' (无冷却)' if cooldown_mins <= 0 else ''}
     {Fore.YELLOW}5.{Style.RESET_ALL} 每小时投币上限: {Fore.GREEN}{max_per_hour} 枚/小时{Style.RESET_ALL}{' (不限)' if max_per_hour <= 0 else ''}
     {Fore.YELLOW}6.{Style.RESET_ALL} ✨ 恢复默认值
@@ -3100,8 +3122,9 @@ def show_comment_menu():
     global RANDOM_ENABLED
     
     while True:
+        _show_cli_permissions(config, ("public_comment", "comment_like"))
         mode_icon = "[NET]" if COMMENT_MODE == "real" else "🎭"
-        mode_text = "真实评论（实际发送到B站）" if COMMENT_MODE == "real" else "模拟评论（仅日志记录，不真发）"
+        mode_text = "真实模式（仍须操作授权及安全检查）" if COMMENT_MODE == "real" else "模拟评论（仅日志记录，不真发）"
         check_status = "[OK] 启用" if COMMENT_CHECK_ENABLED else "⏸️ 关闭"
         random_status = "🎲 已开启 (随机检定)" if RANDOM_ENABLED else "🔒 已关闭 (纯分数)"
         print(f"""
@@ -3194,9 +3217,9 @@ def show_comment_menu():
             new_status = "🎲 已开启 (随机检定)" if RANDOM_ENABLED else "🔒 已关闭 (纯分数)"
             print(f"{Fore.GREEN}[OK] 随机数限制已切换为: {new_status}{Style.RESET_ALL}")
             if RANDOM_ENABLED:
-                print(f"{Fore.CYAN}   AI意图需通过随机概率检定才执行 → 更自然、更像真人{Style.RESET_ALL}")
+                print(f"{Fore.CYAN}   AI意图通过随机检定仅生成候选，执行仍须 ai_permissions 授权{Style.RESET_ALL}")
             else:
-                print(f"{Fore.CYAN}   只看AI意图和分数阈值，跳过随机检定 → 更激进{Style.RESET_ALL}")
+                print(f"{Fore.CYAN}   跳过候选随机检定，执行仍须 ai_permissions 授权{Style.RESET_ALL}")
         else:
             print(f"{Fore.RED}[ERROR] 无效选项！{Style.RESET_ALL}")
 
@@ -3415,6 +3438,7 @@ def show_private_message_menu():
     global ACTIVE_CHAT_ENABLED
 
     while True:
+        _show_cli_permissions(config, ("private_reply", "video_like", "coin", "favorite", "follow_up", "unfollow_user"))
         print(f"""
     ╔══════════════════════════════════════════════════════════╗
     ║                    私信设置菜单                          ║
@@ -3422,17 +3446,17 @@ def show_private_message_menu():
 
     {Fore.CYAN}当前设置:{Style.RESET_ALL}
     • 私信检查: {'启用' if PRIVATE_MESSAGE_ENABLED else '关闭'}
-    • 自动发送回复: {'[OK] 启用（仍受行为审核设置约束）' if PRIVATE_MESSAGE_AUTO_REPLY else '✗ 关闭（拟好但不发）'}
+    • 自动回复候选策略: {'[OK] 启用（仍须 private_reply 授权及现有审核）' if PRIVATE_MESSAGE_AUTO_REPLY else '✗ 关闭（拟好但不发）'}
     • 检查间隔: {PRIVATE_MESSAGE_CHECK_INTERVAL}秒
     • 每次最大处理: {PRIVATE_MESSAGE_MAX_REPLIES}条
-    • 主动私信: {'启用' if config.get('active_chat', {}).get('enabled', ACTIVE_CHAT_ENABLED) else '关闭'}
+    • 主动私信候选策略: {'启用' if config.get('active_chat', {}).get('enabled', ACTIVE_CHAT_ENABLED) else '关闭'}
     • 免打扰: {config.get('active_chat', {}).get('quiet_start_hour', 22):02d}:00-{config.get('active_chat', {}).get('quiet_end_hour', 8):02d}:00
     • 白名单: {'启用 (' + str(len(config.get('active_chat', {}).get('whitelist_uids', []))) + ' 人)' if config.get('active_chat', {}).get('whitelist_enabled', False) else '不限制'}
-    • 主人分享: {'启用' if config.get('owner_share', {}).get('enabled', False) else '关闭'}
+    • 主人分享候选策略: {'启用' if config.get('owner_share', {}).get('enabled', False) else '关闭'}
     • 增强私信 Agent: {'启用' if config.get('private_message', {}).get('agent', {}).get('enabled', True) else '关闭'}
-    • 主人视频互动: {'允许' if config.get('private_message', {}).get('agent', {}).get('allow_account_actions', True) else '禁止'}
-    • Agent 关注判断: {'允许' if config.get('private_message', {}).get('agent', {}).get('allow_social_follow_actions', True) else '禁止'}
-    • 聊得来时主动关注: {'允许' if config.get('private_message', {}).get('agent', {}).get('allow_proactive_social_follow', True) else '禁止'}
+    • 主人视频互动候选: {'启用候选' if config.get('private_message', {}).get('agent', {}).get('allow_account_actions', True) else '禁止'}
+    • Agent 关注候选判断: {'启用候选' if config.get('private_message', {}).get('agent', {}).get('allow_social_follow_actions', True) else '禁止'}
+    • 聊得来时主动关注候选: {'启用候选' if config.get('private_message', {}).get('agent', {}).get('allow_proactive_social_follow', True) else '禁止'}
     • 每日主动关注上限: {config.get('private_message', {}).get('agent', {}).get('social_follow_daily_limit', 2)} 人
     • 私信用户公开资料: {'读取' if config.get('private_message', {}).get('agent', {}).get('sender_public_context_enabled', True) else '关闭'} / 动态: {'读取' if config.get('private_message', {}).get('agent', {}).get('sender_dynamics_enabled', True) else '关闭'} / 刷新: {config.get('private_message', {}).get('agent', {}).get('sender_public_context_refresh_hours', 12)}小时
     • 短句连发合并: {'启用' if config.get('private_message', {}).get('agent', {}).get('burst_merge_enabled', True) else '关闭'} / 等待: {config.get('private_message', {}).get('agent', {}).get('burst_merge_window_seconds', 3)}秒
@@ -3440,7 +3464,7 @@ def show_private_message_menu():
 
     {Fore.CYAN}请选择操作:{Style.RESET_ALL}
     {Fore.GREEN}1.{Style.RESET_ALL} 🔁 开关私信检查
-    {Fore.YELLOW}2.{Style.RESET_ALL} [START] 开关自动发送回复
+    {Fore.YELLOW}2.{Style.RESET_ALL} [START] 开关自动回复候选策略（不能授权发送）
     {Fore.YELLOW}3.{Style.RESET_ALL} ⏰ 修改检查间隔
     {Fore.YELLOW}4.{Style.RESET_ALL} 🔢 修改最大处理数
     {Fore.BLUE}5.{Style.RESET_ALL} 📋 查看私信日志
@@ -3466,7 +3490,7 @@ def show_private_message_menu():
             PRIVATE_MESSAGE_AUTO_REPLY = not PRIVATE_MESSAGE_AUTO_REPLY
             pm_config["auto_reply"] = PRIVATE_MESSAGE_AUTO_REPLY
             save_config(config)
-            print(f"{Fore.GREEN}[OK] 自动发送回复已{'启用' if PRIVATE_MESSAGE_AUTO_REPLY else '关闭'}{Style.RESET_ALL}")
+            print(f"{Fore.GREEN}[OK] 自动回复候选策略已{'启用' if PRIVATE_MESSAGE_AUTO_REPLY else '关闭'}{Style.RESET_ALL}")
         elif choice == "3":
             try:
                 new_val = int(input(f"{Fore.YELLOW}请输入新的检查间隔 (秒, 建议60-600): {Style.RESET_ALL}").strip())
@@ -3525,9 +3549,9 @@ def show_private_message_menu():
         elif choice == "10":
             agent_cfg = pm_config.setdefault("agent", {})
             enabled = input(f"{Fore.YELLOW}增强感知 Agent (1启用/0关闭，当前 {'1' if agent_cfg.get('enabled', True) else '0'}): {Style.RESET_ALL}").strip()
-            actions = input(f"{Fore.YELLOW}允许主人指定点赞/收藏/投币 (1允许/0禁止，当前 {'1' if agent_cfg.get('allow_account_actions', True) else '0'}): {Style.RESET_ALL}").strip()
-            social_actions = input(f"{Fore.YELLOW}允许 Agent 判断关注/取关请求 (1允许/0禁止，当前 {'1' if agent_cfg.get('allow_social_follow_actions', True) else '0'}): {Style.RESET_ALL}").strip()
-            proactive_follow = input(f"{Fore.YELLOW}允许 Agent 聊得来时主动关注 (1允许/0禁止，当前 {'1' if agent_cfg.get('allow_proactive_social_follow', True) else '0'}): {Style.RESET_ALL}").strip()
+            actions = input(f"{Fore.YELLOW}主人视频互动候选（仍须逐项授权，1启用/0关闭，当前 {'1' if agent_cfg.get('allow_account_actions', True) else '0'}): {Style.RESET_ALL}").strip()
+            social_actions = input(f"{Fore.YELLOW}Agent 关注/取关候选判断（仍须逐项授权，1启用/0关闭，当前 {'1' if agent_cfg.get('allow_social_follow_actions', True) else '0'}): {Style.RESET_ALL}").strip()
+            proactive_follow = input(f"{Fore.YELLOW}Agent 主动关注候选（仍须 follow_up 授权，1启用/0关闭，当前 {'1' if agent_cfg.get('allow_proactive_social_follow', True) else '0'}): {Style.RESET_ALL}").strip()
             social_limit = input(f"{Fore.YELLOW}每日主动关注上限 0-20 (0 表示禁止，当前 {agent_cfg.get('social_follow_daily_limit', 2)}): {Style.RESET_ALL}").strip()
             sender_context = input(f"{Fore.YELLOW}读取私信用户公开资料 (1读取/0关闭，当前 {'1' if agent_cfg.get('sender_public_context_enabled', True) else '0'}): {Style.RESET_ALL}").strip()
             sender_dynamics = input(f"{Fore.YELLOW}读取私信用户公开动态 (1读取/0关闭，当前 {'1' if agent_cfg.get('sender_dynamics_enabled', True) else '0'}): {Style.RESET_ALL}").strip()
@@ -3972,8 +3996,9 @@ def show_up_danmaku_menu():
     global DANMAKU_SEND_PROB, DANMAKU_MAX_DAILY_SEND
     
     while True:
-        up_enabled_text = "[*] 已开启" if UP_FOLLOW_ENABLED else "💤 已关闭"
-        danmaku_enabled_text = "[MSG] 已开启" if DANMAKU_ENABLED else "💤 已关闭"
+        _show_cli_permissions(config, ("follow_up", "unfollow_user", "send_danmaku", "danmaku_like"))
+        up_enabled_text = "[*] 候选策略开启" if UP_FOLLOW_ENABLED else "💤 候选策略关闭"
+        danmaku_enabled_text = "[MSG] 读取/候选策略开启" if DANMAKU_ENABLED else "💤 读取/候选策略关闭"
         
         print(f"""
     ╔══════════════════════════════════════════════════════════╗
@@ -3981,7 +4006,7 @@ def show_up_danmaku_menu():
     ╚══════════════════════════════════════════════════════════╝
 
     {Fore.CYAN}▶ UP主关注设置:{Style.RESET_ALL}
-    {Fore.GREEN}1.{Style.RESET_ALL} {'关闭' if UP_FOLLOW_ENABLED else '开启'}UP主关注功能 → 当前: {Fore.YELLOW + up_enabled_text + Style.RESET_ALL}
+    {Fore.GREEN}1.{Style.RESET_ALL} {'关闭' if UP_FOLLOW_ENABLED else '开启'}UP主关注候选策略 → 当前: {Fore.YELLOW + up_enabled_text + Style.RESET_ALL}
     {Fore.GREEN}2.{Style.RESET_ALL} 自动关注概率: {Fore.YELLOW}{UP_FOLLOW_AUTO_PROB}{Style.RESET_ALL}
     {Fore.GREEN}3.{Style.RESET_ALL} 每日关注上限: {Fore.YELLOW}{UP_FOLLOW_MAX_DAILY}{Style.RESET_ALL}
     {Fore.GREEN}4.{Style.RESET_ALL} 关注冷却(分钟): {Fore.YELLOW}{UP_FOLLOW_COOLDOWN_MINUTES}{Style.RESET_ALL}
@@ -3993,7 +4018,7 @@ def show_up_danmaku_menu():
     {Fore.GREEN}10.{Style.RESET_ALL} 特别优秀分数(首看即关): {Fore.YELLOW}{UP_FOLLOW_EXCEPTIONAL_SCORE}{Style.RESET_ALL}
 
     {Fore.CYAN}▶ 弹幕互动设置:{Style.RESET_ALL}
-    {Fore.BLUE}11.{Style.RESET_ALL} {'关闭' if DANMAKU_ENABLED else '开启'}弹幕互动功能 → 当前: {Fore.YELLOW + danmaku_enabled_text + Style.RESET_ALL}
+    {Fore.BLUE}11.{Style.RESET_ALL} {'关闭' if DANMAKU_ENABLED else '开启'}弹幕读取/候选策略 → 当前: {Fore.YELLOW + danmaku_enabled_text + Style.RESET_ALL}
     {Fore.BLUE}12.{Style.RESET_ALL} 读取弹幕概率: {Fore.YELLOW}{DANMAKU_READ_PROB}{Style.RESET_ALL}
     {Fore.BLUE}13.{Style.RESET_ALL} 点赞弹幕概率: {Fore.YELLOW}{DANMAKU_LIKE_PROB}{Style.RESET_ALL}
     {Fore.BLUE}14.{Style.RESET_ALL} 每日点赞上限: {Fore.YELLOW}{DANMAKU_MAX_DAILY_LIKES}{Style.RESET_ALL}
@@ -4083,7 +4108,7 @@ def show_up_danmaku_menu():
                 val = max(5.0, min(10.0, val))
                 UP_FOLLOW_EXCEPTIONAL_SCORE = val
                 config["up_follow"]["exceptional_score"] = val
-                print(f"{Fore.GREEN}已更新: {val} (首看评分 ≥ {val} 即可直接关注){Style.RESET_ALL}")
+                print(f"{Fore.GREEN}已更新: {val} (首看评分 ≥ {val} 可进入关注候选，仍须授权及现有审核){Style.RESET_ALL}")
             except (ValueError, TypeError): print(f"{Fore.RED}输入无效{Style.RESET_ALL}")
         elif choice == "11":
             DANMAKU_ENABLED = not DANMAKU_ENABLED
@@ -6231,6 +6256,7 @@ def import_config():
     new_config = load_config()
     config = new_config
     _reload_all_globals(config)
+    _show_cli_permissions(config)
 
     print(f"\n{Fore.GREEN}════════════════════════════════════════════════{Style.RESET_ALL}")
     print(f"{Fore.GREEN}[OK] 导入完成！成功恢复 {restored} 项，所有配置/登录/状态已恢复{Style.RESET_ALL}")

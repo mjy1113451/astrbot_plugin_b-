@@ -131,9 +131,19 @@ with tempfile.TemporaryDirectory(prefix="bili-import-readonly-") as temporary, E
 
     # Explicit initialization must still work and keep every exported dict alive.
     terminal = Mock()
-    with patch.object(cli, "_initialize_cli_terminal", new=terminal):
+    initialization_output, initialization_error = io.StringIO(), io.StringIO()
+    with patch.object(cli, "_initialize_cli_terminal", new=terminal), \
+            redirect_stdout(initialization_output), redirect_stderr(initialization_error):
         cli.initialize_cli()
     terminal.assert_called_once_with()
+    assert initialization_error.getvalue() == ""
+    if MODE == "plugin":
+        assert initialization_output.getvalue() == ""
+    else:
+        assert "ai_permissions" in initialization_output.getvalue()
+        assert "唯一授权来源" in initialization_output.getvalue()
+        assert "未授权" in initialization_output.getvalue()
+        assert "synthetic-key" not in initialization_output.getvalue()
     assert core.config is config_reference
     assert cli.config is cli_reference
     assert config_file.is_file()
