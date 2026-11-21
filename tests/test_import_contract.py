@@ -33,9 +33,6 @@ class ImportContractTests(unittest.TestCase):
 
     def test_runtime_internal_import_targets_exist(self):
         for path in self.sources():
-            # This unreferenced preview package predates the runtime import repair.
-            if path.relative_to(ROOT).as_posix() == "services/biliclaw/__init__.py":
-                continue
             package = path.relative_to(ROOT).parent.parts
             tree = ast.parse(path.read_text(encoding="utf-8"))
             for node in ast.walk(tree):
@@ -80,8 +77,7 @@ class ImportContractTests(unittest.TestCase):
                     self.assertNotIn(name, forbidden)
 
     def test_required_tools_are_included(self):
-        for name in ("display", "helpers", "lock", "storage", "subtitles",
-                     "desktop_notifications", "web_launcher"):
+        for name in ("display", "helpers", "lock", "storage", "subtitles"):
             with self.subTest(module=name):
                 self.assertTrue((ROOT / "utils" / f"{name}.py").is_file())
 

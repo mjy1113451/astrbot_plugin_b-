@@ -21,7 +21,7 @@ import sys
 import tempfile
 from types import ModuleType, SimpleNamespace
 import unittest
-from unittest.mock import Mock, call, patch
+from unittest.mock import AsyncMock, Mock, call, patch
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -136,6 +136,7 @@ class _PackageEnvironment:
         self.foreign_cli = self.install(_module("cli.app"))
         self.foreign_cli.config = {"owner": "foreign-cli", "nested": {"keep": [1]}}
         self.foreign_cli._release_bot_lock = Mock()
+        self.foreign_cli._reload_all_globals = Mock()
         self.foreign_config = self.install(_module("core.config"))
         self.foreign_config.config = {"owner": "foreign-core"}
         self.foreign_config.initialize_config = Mock()
@@ -173,11 +174,17 @@ class _PackageEnvironment:
         app = self.install(_module(package + ".cli.app"))
         app.config = {"owner": package, "nested": {"keep": [package]}}
         app._release_bot_lock = Mock()
+        app._reload_all_globals = Mock()
+        app.video_to_html_bg = AsyncMock()
         return app
 
     def install_runtime(self, package, *, with_bridge=True):
         app = self.install_cli(package)
+        self.install_package(package, "core")
         self.install_package(package, "brain")
+        video = self.install(_module(package + ".brain.video_analysis"))
+        video.analyze_bilibili_video_input = AsyncMock()
+        video.up_homepage_learn = AsyncMock()
         finished = asyncio.Event()
 
         async def run():
@@ -196,7 +203,7 @@ class _PackageEnvironment:
             bridge.apply_astrbot_config = Mock()
         config = self.install(_module(package + ".core.config"))
         config.initialize_config = Mock()
-        return SimpleNamespace(app=app, brain=brain, bridge=bridge, config=config,
+        return SimpleNamespace(app=app, brain=brain, video=video, bridge=bridge, config=config,
                                display=display, finished=finished)
 
     def load_real_bridge(self, package):
@@ -245,6 +252,7 @@ class _PackageEnvironment:
         test.assertEqual(self.foreign_cli.config, self.foreign_cli_config)
         test.assertEqual(self.foreign_config.config, self.foreign_core_config)
         self.foreign_cli._release_bot_lock.assert_not_called()
+        self.foreign_cli._reload_all_globals.assert_not_called()
         self.foreign_config.initialize_config.assert_not_called()
         self.foreign_bridge.apply_astrbot_config.assert_not_called()
         self.foreign_display.log.assert_not_called()
@@ -441,7 +449,7 @@ class PackageStartBotTests(_PackageTestMixin, unittest.IsolatedAsyncioTestCase):
                 runtime.brain.AgentBrain.assert_called_once_with()
                 self.assertEqual(calls.mock_calls, [call.initialize(), call.brain()])
                 self.assertNotIn(package + ".core.astrbot_config_bridge", sys.modules)
-                self.assertNotIn(package + ".core", sys.modules)
+                self.assertIs(sys.modules[package + ".core"].config, runtime.config)
                 self.environment.assert_isolated(self)
         self.assertIsNot(tasks[0], tasks[1])
 
@@ -609,6 +617,10 @@ class PackageConfigBridgeTests(_PackageTestMixin, unittest.TestCase):
                 self.assertEqual(cli_reference, updated)
                 self.assertIsNot(cli_reference["api"], updated["api"])
                 self.assertIsNot(cli_reference["api"]["models"], updated["api"]["models"])
+                apps[package]._reload_all_globals.assert_called_once_with(cli_reference)
+                self.assertIs(apps[package]._reload_all_globals.call_args.args[0], cli_reference)
+                apps[package]._reload_all_globals.reset_mock()
+                apps[other]._reload_all_globals.assert_not_called()
                 cli_reference["api"]["models"].append("cli-only")
                 self.assertEqual(shared_reference["api"]["models"], [package])
                 self.assertIs(apps[other].config, other_reference)

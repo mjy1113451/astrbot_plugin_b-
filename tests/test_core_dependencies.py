@@ -138,6 +138,16 @@ class CoreDependencyTests(unittest.TestCase):
         self.assertEqual({name for name in sys.modules if name.startswith(PACKAGE + ".")},
                          {f"{PACKAGE}.main", f"{PACKAGE}._runtime"})
 
+    def test_plugin_version_matches_metadata_without_importing_business(self):
+        metadata = (ROOT / "metadata.yaml").read_text(encoding="utf-8")
+        version = next(line.partition(":")[2].strip().strip("\"'")
+                       for line in metadata.splitlines() if line.startswith("version:"))
+        self.assertEqual(version, "3.1.7")
+        self.assertEqual(self.main.PLUGIN_VERSION, version)
+        self.assertEqual(self.main.BilibiliLearningBot.version, version)
+        self.assertNotIn(f"{PACKAGE}.core.config", sys.modules)
+        self.assertNotIn(f"{PACKAGE}.core.astrbot_config_bridge", sys.modules)
+
     def test_core_minimums_are_accepted(self):
         with dependency_environment():
             self.assertEqual(self.main._check_core_dependencies(), [])

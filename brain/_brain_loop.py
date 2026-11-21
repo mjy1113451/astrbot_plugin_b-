@@ -19,6 +19,7 @@ from ..utils.display import log_exception
 from ..utils.helpers import _mask_urls
 from ..utils.helpers import _safe_task_callback
 from ..api.throttle import _bili_throttle
+from ..core.action_permissions import allowed, require
 from ..utils.lock import _acquire_bot_lock, _release_bot_lock
 from .decision import decode_ai_mapping, parse_video_decision, response_text
 
@@ -1056,7 +1057,7 @@ class BrainLoopMixin:
 
                 # [FIX] 学习归档已提前执行（在分数门槛之前，所有视频都学）
                 if learn_success:
-                    if self.private_message_mgr:
+                    if self.private_message_mgr and allowed("private_reply"):
                         try:
                             from ..services.owner_share import OwnerShareService
                             share_result = await OwnerShareService().share_learned_video(
@@ -1133,11 +1134,18 @@ class BrainLoopMixin:
                         log(f"[STAR] 自动标记喜欢的UP主: @{up} (UID:{up_uid}) [评分:{score}, 概率:{fav_prob:.0%}]", "FAVORITE")
 
                 if do_like_trigger:
-                    from ..services.like_review import LikeReviewInbox, requires_review
-                    if requires_review(config, "video_like"):
-                        LikeReviewInbox(DATA_DIR).propose(bvid, title, up, score, thought, video_url)
-                        log("AI 点赞建议已进入审核收件箱，等待用户决定", "INFO")
+                    if not allowed("video_like"):
+                        log("视频点赞未获授权，未执行，也未提交审核", "WARN")
                         do_like_trigger = False
+                    else:
+                        from ..services.like_review import LikeReviewInbox, requires_review
+                        if requires_review(config, "video_like"):
+                            if allowed("video_like"):
+                                LikeReviewInbox(DATA_DIR).propose(bvid, title, up, score, thought, video_url)
+                                log("AI 点赞建议已进入审核收件箱，等待用户决定", "INFO")
+                            else:
+                                log("视频点赞授权已撤销，未提交审核", "WARN")
+                            do_like_trigger = False
 
                 if do_like_trigger and video_liking_enabled():
                     try:
@@ -1147,6 +1155,7 @@ class BrainLoopMixin:
                             log("正在尝试点赞...", "ACT")
                             aid = v.get_aid()
                             await _bili_throttle()  # 🔒 全局节流
+                            require("video_like")
                             await v.like(status=True)
                             log("点赞成功！", "SUCCESS")
                             action_log.append("点赞")
@@ -1165,14 +1174,21 @@ class BrainLoopMixin:
                         log_exception("点赞失败 (可能受限)", e)
 
                 if do_fav:
-                    from ..services.like_review import ActionReviewInbox, requires_review
-                    if requires_review(config, "favorite"):
-                        ActionReviewInbox(DATA_DIR).propose(
-                            "favorite", f"收藏视频《{title}》", thought,
-                            payload={"bvid": bvid}, metadata={"up_name": up, "score": score, "url": video_url},
-                            dedupe_key=f"favorite:{bvid}")
-                        log("AI 收藏建议已进入行为审核", "INFO")
+                    if not allowed("favorite"):
+                        log("平台收藏未获授权，未执行，也未提交审核", "WARN")
                         do_fav = False
+                    else:
+                        from ..services.like_review import ActionReviewInbox, requires_review
+                        if requires_review(config, "favorite"):
+                            if allowed("favorite"):
+                                ActionReviewInbox(DATA_DIR).propose(
+                                    "favorite", f"收藏视频《{title}》", thought,
+                                    payload={"bvid": bvid}, metadata={"up_name": up, "score": score, "url": video_url},
+                                    dedupe_key=f"favorite:{bvid}")
+                                log("AI 收藏建议已进入行为审核", "INFO")
+                            else:
+                                log("平台收藏授权已撤销，未提交审核", "WARN")
+                            do_fav = False
 
                 if do_fav:
                     try:
@@ -1187,6 +1203,7 @@ class BrainLoopMixin:
                                 log(f"正在尝试收藏到默认收藏夹...", "ACT")
                                 aid = v.get_aid()
                                 await _bili_throttle()  # 🔒 全局节流
+                                require("favorite")
                                 await v.set_favorite(add_media_ids=[default_folder_id])
                                 log("收藏成功！", "SUCCESS")
                                 action_log.append("收藏")
@@ -1207,21 +1224,29 @@ class BrainLoopMixin:
                         log_exception("收藏失败", e)
 
                 if do_coin:
-                    from ..services.like_review import ActionReviewInbox, requires_review
-                    if requires_review(config, "coin"):
-                        ActionReviewInbox(DATA_DIR).propose(
-                            "coin", f"为视频《{title}》投币", thought,
-                            payload={"bvid": bvid, "num": 1}, metadata={"up_name": up, "score": score, "url": video_url},
-                            dedupe_key=f"coin:{bvid}")
-                        log("AI 投币建议已进入行为审核", "INFO")
+                    if not allowed("coin"):
+                        log("投币未获授权，未执行，也未提交审核", "WARN")
                         do_coin = False
+                    else:
+                        from ..services.like_review import ActionReviewInbox, requires_review
+                        if requires_review(config, "coin"):
+                            if allowed("coin"):
+                                ActionReviewInbox(DATA_DIR).propose(
+                                    "coin", f"为视频《{title}》投币", thought,
+                                    payload={"bvid": bvid, "num": 1}, metadata={"up_name": up, "score": score, "url": video_url},
+                                    dedupe_key=f"coin:{bvid}")
+                                log("AI 投币建议已进入行为审核", "INFO")
+                            else:
+                                log("投币授权已撤销，未提交审核", "WARN")
+                            do_coin = False
 
                 if do_coin:
                     try:
                         await asyncio.sleep(random.uniform(2, 4))
                         aid = v.get_aid()
                         await _bili_throttle()  # 🔒 全局节流
-                        await v.pay_coin(num=1, like=True)
+                        require("coin")
+                        await v.pay_coin(num=1, like=False)
                         self.coins_spent += 1
                         self.last_coin_at = datetime.now()  # 记录投币时间（冷却用）
                         if hasattr(self, '_coin_hour_timestamps'):
@@ -1241,6 +1266,9 @@ class BrainLoopMixin:
                         log_exception("投币失败", e)
 
                 # 回复他人评论的功能
+                if do_replies and not allowed("public_comment"):
+                    log("公开评论回复未获授权，未发送", "WARN")
+                    do_replies = []
                 if do_replies and PROB_COMMENT_OTHERS > 0 and public_commenting_enabled():
                     for reply in do_replies:
                         try:
@@ -1270,10 +1298,12 @@ class BrainLoopMixin:
 
                                 log(f"正在回复评论 ID:{target_id}: {reply_content[:50]}...", "COMMENT")
                                 await asyncio.sleep(human_reply_delay())
+                                require("public_comment")
                                 if COMMENT_MODE == "simulate":
                                     log(f"[模拟] 拟回复视频评论 ID:{target_id}: {reply_content[:50]}...", "SIMULATE")
                                 else:
                                     await _bili_throttle()  # 🔒 全局节流
+                                    require("public_comment")
                                     await comment.send_comment(
                                         text=reply_content,
                                         oid=aid,

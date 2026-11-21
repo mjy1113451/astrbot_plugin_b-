@@ -11,6 +11,7 @@ import hashlib, base64, secrets
 from colorama import Fore, Style
 from ..utils.storage import get_backup_dir
 from ..utils.display import mask_secret, log, log_exception
+from .action_permissions import defaults as permission_defaults
 from .user_data import (
     DATA_DIR as _USER_DATA_DIR,
     HIGHLIGHTS_DIR as _USER_HIGHLIGHTS_DIR,
@@ -224,15 +225,8 @@ DEFAULT_CONFIG = {
         "vision_api_key": "",
         "vision_base_url": ""
     },
-    "model_presets": PROVIDER_PRESETS,
     "active_preset": "",
-    "project_info": {
-        "name": "Bilibili Learning Bot",
-        "summary": "本地运行的 B 站智能学习与互动工作台",
-        "homepage": "https://bxya.app/",
-        "repository": "https://github.com/xiaoyaya191/bilibili_learning_bot",
-        "license": "", "contact": "", "qq_group_url": "https://qun.qq.com/join.html?gc=1056941856"
-    },
+    "ai_permissions": permission_defaults(),
     "interaction": {
         "coin_threshold": 8.0, "fav_threshold": 8.5, "interest_threshold": 6.5,
         "learn_min_score": 6.0, "learn_min_duration_seconds": 60,
@@ -481,20 +475,10 @@ DEFAULT_CONFIG = {
     },
     "rag_qa": {"enabled": False, "model": "auto", "max_context_chunks": 5, "enable_function_calling": True, "sources": ["knowledge_base", "single_video"]},
     "version_history": {"enabled": False, "max_versions": 5, "diff_on_regenerate": True},
-    "platform_adapter": {
-        "enabled": True,
-        "ui_platforms": ["bilibili", "youtube", "douyin", "kuaishou", "web", "local"],
-        "supported": ["bilibili", "youtube", "douyin", "kuaishou", "web", "local"],
-        "prefer_platform_subtitles": True,
-        "subtitle_langs": ["zh-Hans", "zh", "zh-CN", "en"],
-        "download_format": "bv*+ba/best/best",
-        "proxy": "",
-        "allow_web_local_files": False,
-    },
+    "platform_adapter": {"proxy": ""},
     "network": {
         "proxy": {"enabled": False, "url": ""},
     },
-    "browser_extension": {"enabled": False, "port": 9527, "subtitle_direct_capture": True},
     "ai_subtitle_verify": {"enabled": True, "knowledge_review_interval": 10, "knowledge_review_sample_size": 3},
     "cooldown": {
         "startup_cooldown_min": 5, "startup_cooldown_max": 10,

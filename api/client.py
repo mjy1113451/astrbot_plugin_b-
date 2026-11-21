@@ -14,6 +14,7 @@ from bilibili_api import Credential, user, homepage, comment, video, Danmaku
 from bilibili_api.comment import CommentResourceType
 from bilibili_api.video import Video
 
+from ..core.action_permissions import allowed
 from ..core.config import COOKIE_FILE
 from ..core.user_data import managed_file_path, write_private_json
 from ..utils.display import log, log_exception
@@ -421,10 +422,20 @@ class BiliClient:
                     return {'code': -1, 'msg': f"上报异常: {e}"}
         return {'code': -1, 'msg': "上报重试耗尽"}
 
+    @staticmethod
+    def _permission_denied(action):
+        """Return the client failure contract without logging account or request data."""
+        log(f"平台操作未授权，未执行 ({action})", "WARN")
+        return {"code": -1, "msg": "平台操作未授权，未执行"}
+
     # ── [*] UP主关注 / 取关 ──────────────────────────────────────────
     async def follow_up(self, uid: int):
         """关注UP主。uid: UP主的UID"""
+        if not allowed("follow_up"):
+            return self._permission_denied("follow_up")
         await _bili_throttle("关注UP主")
+        if not allowed("follow_up"):
+            return self._permission_denied("follow_up")
         try:
             u = user.User(uid, credential=self.credential)
             await u.modify_relation(user.RelationType.SUBSCRIBE)
@@ -454,7 +465,11 @@ class BiliClient:
 
     async def unfollow_up(self, uid: int):
         """取关UP主。"""
+        if not allowed("unfollow_user"):
+            return self._permission_denied("unfollow_user")
         await _bili_throttle("取关UP主")
+        if not allowed("unfollow_user"):
+            return self._permission_denied("unfollow_user")
         try:
             u = user.User(uid, credential=self.credential)
             await u.modify_relation(user.RelationType.UNSUBSCRIBE)
@@ -728,7 +743,11 @@ class BiliClient:
 
     async def like_danmaku(self, dmid: str, cid: int, bvid: str = ""):
         """点赞弹幕。dmid: 弹幕字符串ID (id_str), cid: 视频cid"""
+        if not allowed("danmaku_like"):
+            return self._permission_denied("danmaku_like")
         await _bili_throttle("点赞弹幕")
+        if not allowed("danmaku_like"):
+            return self._permission_denied("danmaku_like")
         try:
             # 确保 credential 已加载
             if not self.credential:
@@ -742,8 +761,13 @@ class BiliClient:
                         await v.like_danmaku(dmid=dmid, cid=cid)
                         return {"code": 0, "msg": f"弹幕 {dmid[:12]}... 点赞成功"}
                 except Exception as e:
+                    if not allowed("danmaku_like"):
+                        return self._permission_denied("danmaku_like")
                     log_exception("bilibili_api 弹幕点赞失败，降级到 httpx", e)
 
+            # 降级也必须独立检查当前授权，不能沿用 SDK 调用前的许可。
+            if not allowed("danmaku_like"):
+                return self._permission_denied("danmaku_like")
             # 降级：直接用 httpx + cookies
             if not self.raw_cookies:
                 self._load_credential()
@@ -751,6 +775,8 @@ class BiliClient:
             if not csrf:
                 return {"code": -1, "msg": "弹幕点赞失败: 缺少 bili_jct (csrf token)"}
             client = await self._get_http_client()
+            if not allowed("danmaku_like"):
+                return self._permission_denied("danmaku_like")
             resp = await client.post('https://api.bilibili.com/x/v2/dm/thumbup/add', data={
                 'dmid': dmid,
                 'oid': cid,
@@ -766,7 +792,11 @@ class BiliClient:
 
     async def send_danmaku(self, bvid: str, text: str, dm_time: float = 0.0):
         """发送弹幕到视频。"""
+        if not allowed("send_danmaku"):
+            return self._permission_denied("send_danmaku")
         await _bili_throttle("发送弹幕")
+        if not allowed("send_danmaku"):
+            return self._permission_denied("send_danmaku")
         try:
             # 确保 credential 已加载
             if not self.credential:

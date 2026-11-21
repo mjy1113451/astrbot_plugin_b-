@@ -41,7 +41,7 @@
   这些包已从 `requirements.txt` 移除（避免触发核心依赖保护，见 issues #18 / #20），
   最低版本统一维护在 `main.py` 的 `_CORE_PROVIDED_DEPENDENCIES`。
   每次执行 `/bili_start` 都会重新校验导入与版本，缺失时会拒绝启动并列出原因；补齐后可直接重试，无需重启 AstrBot。
-- **插件专属依赖**：见 `requirements.txt`（`bilibili-api-python`、`Flask`、`yt-dlp`、`pystray` 等），均使用兼容区间。
+- **插件专属依赖**：见 `requirements.txt`（`bilibili-api-python`、`Flask`、`yt-dlp` 等；Flask 仅用于独立 CLI 本地预览），均使用兼容区间。
 - **可选依赖**：
   - SOCKS 代理：需要 `httpx[socks]`；缺失时仅告警，不影响直连或 HTTP 代理。
   - ASR：`funasr` / `torch` / `torchaudio`（或 Whisper 相关包），按需手动安装。
@@ -109,13 +109,41 @@ git clone https://github.com/mjy1113451/astrbot_plugin_b-.git
 
 - `use_astrbot_config` 默认为 `false`，即继续使用 `Data/config.json`。
 - 启用后，还需要在 `apply_sections` 中列出要应用的配置组名称；默认空列表不会修改任何旧配置。
-- 发送 `/bili_start` 时，**选中的组内所有字段（含默认值）都会覆盖业务配置**；未选中的组保持不变。已运行的任务需先停止再启动。
+- 执行 `/bili_start`、`/bili_analyze`、`/bili_up_learn` 或 `/bili_video2html` 进入业务前，**选中的组内所有字段（含默认值）都会覆盖业务配置**；未选中的组保持不变。更改已运行任务的配置前应先停止任务。
 - 关闭开关不会撤销已写入的值。
 - 密钥留空或填写脱敏值时保留原值；新密钥会以明文写入业务配置文件，请自行保护。
 
-可应用的配置组：`api`、`fallback_models`、`fallback_provider`、`video`、`prompt_injection`、`vision`、`approval_review`、`reply_safety`、`agent`、`learning_workflow`。
+可应用的配置组：`api`、`fallback_models`、`fallback_provider`、`video`、`prompt_injection`、`vision`、`ai_permissions`、`approval_review`、`reply_safety`、`agent`、`learning_workflow`。
 
 > 升级前请备份面板配置：AstrBot 加载新 schema 时会移除面板中已不再声明的旧字段；业务配置文件不受影响。
+
+### AI 平台操作授权（issue #42）
+
+**升级后，所有平台写操作默认拒绝，需要重新逐项授权。** 不会根据旧的自动回复、互动概率、`automation.allow_*` 或人工审批设置推断授权。本地学习、知识库读取、配置和运行日志不受平台写操作总开关影响。
+
+在 AstrBot 插件配置中（保存前应先停止正在运行的学习任务）：
+
+1. 开启 `use_astrbot_config`，在 `apply_sections` 中加入 `ai_permissions`（需要配置 AI 连接时另加 `api` 等组）。
+2. 展开 `ai_permissions` → `actions`。即使总开关关闭，具体操作项也可查看；开启 `enabled` **不会自动勾选任何操作**。
+3. 只勾选确实需要的视频点赞、投币、平台收藏、关注、取关、公开评论/回复、评论点赞、私信、弹幕发送或弹幕点赞。
+4. 保存后重新进入上述业务命令。总授权和对应操作必须同时为 `true` 才可执行；类型错误、未知动作或配置读取失败均拒绝。
+
+独立 CLI 使用同一份 `Data/config.json`：在“ALL → ai_permissions”设置总开关和 `actions`，这是平台写操作的唯一授权来源。互动概率、自动回复、关注/弹幕等旧开关只控制候选策略，不代表获准执行；CLI 初始化、设置刷新和备份导入后会显示各项“已授权/未授权”。导入旧备份不会根据其中的旧开关自动开启权限，也不会为提示额外改写配置。即使显示已授权，真实/模拟模式、限额、安全和已有审批要求仍单独生效。
+
+直接管理业务配置时使用同一结构，例如只许可视频点赞：
+
+```json
+{
+  "ai_permissions": {
+    "enabled": true,
+    "actions": {"video_like": true}
+  }
+}
+```
+
+这是配置片段，应合并到现有配置，**不要用它替换整份含 API 配置的文件**。其它未声明的操作仍然拒绝。
+
+操作授权与 `approval_review` 人工审批、`reply_safety` 关键词审查及提示注入防护彼此独立：授权不等于批准，也不绕过现有安全规则。进入审批队列不表示已执行；本次清理不提供自动批准，也未新增插件内批准/执行指令，已有审核队列和审计仍保留。历史公开评论路径的关键词审查不等同于完整人工审批接线，本次不宣称将该历史缺口一并修复。仅显示当前插件已接线的操作，不移植独立 Web 的动态发布或收藏夹管理开关。
 
 ### 数据存放位置
 
@@ -153,6 +181,12 @@ BILI_USER_DATA_DIR="/absolute/AstrBot/data/plugin_data/astrbot_plugin_bilibili_l
 
 > 插件不提供 Web 管理后台。仅独立 CLI 支持本地 HTML 预览与打开浏览器；插件模式不会启动预览服务或等待动画。
 
+### 插件包清理范围
+
+已退役独立 Web 主页聊天/研究存档接口、残缺的 `services/biliclaw` 预览包、旧 Web 启动器和桌面通知队列，以及未接入插件运行链的旧 xingye 后台/聊天等组件；同步移除 Web 密码投影、托盘/CORS 依赖和无消费者的项目宣传/浏览器扩展默认配置。旧业务配置中的未知组仍保留，不自动删除已有字段或任何用户文件。
+
+保留 `.apertureprism/` 审核规则、业务安全/人工审批规则和审计、必要 CLI 登录/迁移及插件复用业务、现用 `ob_bridge/`、ASR、知识库和 HTML/文档导出。删除旧源码不删除旧研究记录、Cookie、API Key、密钥或审核数据，也不执行恢复出厂。`xingye_bot/safety.py` 与含安全规则的 `bilibili_ops.py` 同样保留。
+
 ---
 
 ## 依赖与安装冲突排查
@@ -186,10 +220,11 @@ astrbot_plugin_b--main/
 ├── security/               # 内容安全审查
 ├── services/               # 深研 / 测验 / 思维导图 / Word / RAG / 兴趣 / 提醒等
 ├── ob_bridge/              # 开放平台桥接（鉴权 / A/B / 审计）
-├── xingye_bot/             # 扩展组件（ASR / 日记 / 进化 / B站操作）
+├── xingye_bot/             # 现用 ASR / LLM / 视频理解 / KB 检索与保留安全规则
 ├── cli/                    # 终端交互菜单与配置读写
 ├── core/                   # 配置、全局变量、用户数据路径、面板配置桥接
 ├── tests/                  # 单元测试（unittest）
+├── .apertureprism/          # 仓库审核规则（保留）
 └── CHANGELOG.md            # 版本更新记录
 ```
 

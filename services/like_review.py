@@ -11,6 +11,8 @@ import uuid
 from datetime import datetime
 from pathlib import Path
 
+from ..utils.display import log
+
 _LOCK = threading.RLock()
 
 ACTION_TYPES = {
@@ -30,7 +32,6 @@ ACTION_TYPES = {
 def default_review_settings() -> dict:
     return {
         "enabled": True,
-        "desktop_notification": True,
         "action_types": {key: bool(meta["default"]) for key, meta in ACTION_TYPES.items()},
     }
 
@@ -40,7 +41,6 @@ def review_settings(config: dict | None) -> dict:
     source = (config or {}).get("approval_review", {})
     if isinstance(source, dict):
         result["enabled"] = source.get("enabled", True) is not False
-        result["desktop_notification"] = source.get("desktop_notification", True) is not False
         selected = source.get("action_types", {})
         if isinstance(selected, dict):
             for key in ACTION_TYPES:
@@ -171,14 +171,7 @@ class ActionReviewInbox:
             }
             rows.append(row)
             self._write(rows)
-            try:
-                config = json.loads((self.path.parent / "config.json").read_text(encoding="utf-8"))
-                notify_enabled = (config.get("approval_review") or {}).get("desktop_notification", True)
-                if notify_enabled is not False:
-                    from ..utils.desktop_notifications import enqueue
-                    enqueue(self.path.parent, "BiliLearn approval needed", f"{row['action_label']}: {row['title']}")
-            except (OSError, json.JSONDecodeError):
-                pass
+            log(f"操作已加入人工审核队列: {row['action_label']}（待审核，不会自动执行）", "WARN")
             return row
 
     def cancel_pending_for_account_switch(self, previous_uid: str, next_uid: str) -> int:

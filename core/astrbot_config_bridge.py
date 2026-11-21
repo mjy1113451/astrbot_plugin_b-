@@ -87,9 +87,12 @@ def apply_astrbot_config(values):
             existing = json.load(stream)
         if not isinstance(existing, dict):
             raise ValueError("Business configuration must be a JSON object")
+        # Validate the old configuration before any save; never overwrite a file
+        # that the business loader cannot read, even when the patch is valid.
+        loaded = shared.load_config()
         safety = existing.get("reply_safety")
         if isinstance(safety, dict) and "blocked_keywords" in safety:
-            safety["blocked_keywords"] = shared.load_config().get("reply_safety", {}).get(
+            safety["blocked_keywords"] = loaded.get("reply_safety", {}).get(
                 "blocked_keywords", []
             )
     else:
@@ -106,5 +109,9 @@ def _sync_loaded_config(shared, updated):
     shared.config.update(updated)
     app = sys.modules.get(f"{__package__.rsplit('.', 1)[0]}.cli.app")
     if app is not None and isinstance(getattr(app, "config", None), dict):
-        app.config.clear()
-        app.config.update(deepcopy(updated))
+        if app.config is not shared.config:
+            app.config.clear()
+            app.config.update(deepcopy(updated))
+        reload_globals = getattr(app, "_reload_all_globals", None)
+        if callable(reload_globals):
+            reload_globals(app.config)

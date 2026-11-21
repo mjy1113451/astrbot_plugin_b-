@@ -9,6 +9,7 @@ from bilibili_api import user, homepage, search as bili_search
 from bilibili_api import comment as bili_comment
 from bilibili_api import video as bili_video
 from bilibili_api.comment import CommentResourceType
+from ..core.action_permissions import allowed
 from ..core.config import INTERESTS_FILE, COOKIE_FILE
 from ..core.user_data import DATA_DIR
 
@@ -305,20 +306,38 @@ class BiliToolbox:
         except OSError:
             pass
 
+    @staticmethod
+    def _permission_denied(action):
+        """Static tool markers must never echo untrusted messages or private data."""
+        _log(f"平台操作未授权，未执行 ({action})", "WARN")
+        return {
+            "ok": False, "executed": False, "queued": False,
+            "error": "not executed: action permission denied",
+            "message": "平台操作未授权，未执行",
+        }
+
     async def request_social_relation(self, action, target_uid, talker_id, message_text, reason,
                                       source="private_message", display_name="", profile=None):
         """Queue or execute a bounded Agent relation action without exposing credentials."""
+        if action not in {"follow", "unfollow"}:
+            return {"ok": False, "message": "不支持的社交关系操作"}
+        action_type = "follow_up" if action == "follow" else "unfollow_user"
+        if not allowed(action_type):
+            return self._permission_denied(action_type)
         try:
             target_uid = int(target_uid)
         except (TypeError, ValueError):
             return {"ok": False, "message": "缺少有效的用户 UID"}
         if not target_uid or target_uid == self.uid:
             return {"ok": False, "message": "不能修改自己的关注关系"}
-        if action not in {"follow", "unfollow"}:
-            return {"ok": False, "message": "不支持的社交关系操作"}
 
         from ..core.config import load_config
-        runtime_config = load_config()
+        try:
+            runtime_config = load_config()
+        except Exception:
+            return self._permission_denied(action_type)
+        if not allowed(action_type, runtime_config):
+            return self._permission_denied(action_type)
         agent_cfg = runtime_config.get("private_message", {}).get("agent", {})
         if agent_cfg.get("allow_social_follow_actions", True) is False:
             return {"ok": False, "message": "Agent 关注工具已在设置中关闭"}
@@ -342,7 +361,6 @@ class BiliToolbox:
         if len(reason) < 10:
             return {"ok": False, "message": "AI 未给出足够的社交判断理由，本次不修改关注关系"}
 
-        action_type = "follow_up" if action == "follow" else "unfollow_user"
         action_label = "关注" if action == "follow" else "取消关注"
         public_profile = profile if isinstance(profile, dict) else {}
         target_name = str(display_name or public_profile.get("name") or target_uid)[:80]
@@ -355,6 +373,8 @@ class BiliToolbox:
             },
         }
         from .like_review import ActionReviewInbox, requires_review, review_settings
+        if not allowed(action_type):
+            return self._permission_denied(action_type)
         if requires_review(runtime_config, action_type):
             row = ActionReviewInbox(DATA_DIR).propose(
                 action_type,
@@ -373,6 +393,8 @@ class BiliToolbox:
 
         from ..api.throttle import _bili_throttle
         await _bili_throttle("Agent 社交关系操作")
+        if not allowed(action_type):
+            return self._permission_denied(action_type)
         target = user.User(target_uid, self.credential)
         try:
             relation = user.RelationType.SUBSCRIBE if action == "follow" else user.RelationType.UNSUBSCRIBE
@@ -662,6 +684,8 @@ class BiliToolbox:
         bvid = self._normalize_bvid(bvid)
         if action not in {"video_like", "favorite", "coin"} or not bvid:
             return {"ok": False, "message": "缺少有效的视频 BV 号"}
+        if not allowed(action):
+            return self._permission_denied(action)
         if not self.is_owner(talker_id):
             return {"ok": False, "message": "只有已配置的主人 UID 可以要求账号执行互动"}
 
@@ -675,7 +699,12 @@ class BiliToolbox:
             numeric_balance = None
 
         from ..core.config import load_config
-        runtime_config = load_config()
+        try:
+            runtime_config = load_config()
+        except Exception:
+            return self._permission_denied(action)
+        if not allowed(action, runtime_config):
+            return self._permission_denied(action)
         agent_cfg = runtime_config.get("private_message", {}).get("agent", {})
         if agent_cfg.get("allow_account_actions", True) is False:
             return {"ok": False, "message": "主人互动工具已在设置中关闭"}
@@ -697,6 +726,8 @@ class BiliToolbox:
         labels = {"video_like": "点赞", "favorite": "收藏", "coin": "投币"}
         review_is_enabled = review_settings(runtime_config)["enabled"]
         must_review = requires_review(runtime_config, action) or (review_is_enabled and not explicit)
+        if not allowed(action):
+            return self._permission_denied(action)
         if must_review:
             row = ActionReviewInbox(DATA_DIR).propose(
                 action,
@@ -721,16 +752,26 @@ class BiliToolbox:
         from ..api.throttle import _bili_throttle
         video = bili_video.Video(bvid=bvid, credential=self.credential)
         await _bili_throttle()
+        if not allowed(action):
+            return self._permission_denied(action)
         if action == "video_like":
-            if await video.has_liked():
+            has_liked = await video.has_liked()
+            if not allowed(action):
+                return self._permission_denied(action)
+            if has_liked:
                 return {"ok": True, "executed": False, "message": "该视频已经点赞"}
             await video.like(status=True)
         elif action == "favorite":
-            if await video.has_favoured():
+            has_favoured = await video.has_favoured()
+            if not allowed(action):
+                return self._permission_denied(action)
+            if has_favoured:
                 return {"ok": True, "executed": False, "message": "该视频已经收藏"}
             from bilibili_api import favorite_list
             folders = await favorite_list.get_video_favorite_list(
                 uid=int(self.credential.dedeuserid), video=video, credential=self.credential)
+            if not allowed(action):
+                return self._permission_denied(action)
             folder_items = (folders or {}).get("list") or []
             if not folder_items:
                 return {"ok": False, "message": "没有找到可用收藏夹"}
