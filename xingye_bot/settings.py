@@ -45,7 +45,6 @@ class BotSettings:
     base_url: str = "https://api.openai.com/v1"
     models: dict[str, str] = field(default_factory=lambda: DEFAULT_MODELS.copy())
     fallback_models: dict[str, str] = field(default_factory=lambda: DEFAULT_FALLBACK_MODELS.copy())
-    panel_password: str = ""
     owner_mid: str = ""
     max_daily_actions: int = 20
     dry_run: bool = True
@@ -186,7 +185,6 @@ def load_settings() -> BotSettings:
     if not api.get("model_vision"):
         api["model_vision"] = getattr(_root_cfg, "MODEL_VISION", "")
     automation = _dict(raw.get("automation"))
-    web = _dict(raw.get("web"))
     video = _dict(raw.get("video"))
     behavior = _dict(raw.get("behavior"))
 
@@ -227,7 +225,6 @@ def load_settings() -> BotSettings:
             "fast": os.getenv("BILI_AI_MODEL_FAST_FALLBACK") or fallback_models["fast"],
             "embedding": os.getenv("BILI_AI_MODEL_EMBEDDING_FALLBACK") or fallback_models.get("embedding", DEFAULT_FALLBACK_MODELS["embedding"]),
         },
-        panel_password=os.getenv("BILI_LEARNING_PANEL_PASSWORD") or web.get("password", ""),
         owner_mid=str(_dict(raw.get("bilibili")).get("owner_mid", "")),
         max_daily_actions=_int(automation.get("max_daily_actions"), 20, 0, 1000),
         dry_run=_bool(automation.get("dry_run"), True),
@@ -272,57 +269,3 @@ def load_settings() -> BotSettings:
         sleep_start=str(automation.get("sleep_start", "02:00")),
         sleep_end=str(automation.get("sleep_end", "08:00")),
     )
-
-
-def public_config(settings: BotSettings) -> dict[str, Any]:
-    return {
-        "base_url": settings.base_url,
-        "configured": settings.configured,
-        "models": settings.models,
-        "fallback_models": settings.fallback_models,
-        "auth_required": bool(settings.panel_password),
-        "owner_mid": settings.owner_mid,
-        "dry_run": settings.dry_run,
-        "permissions": {
-            "comment": settings.allow_comment,
-            "like": settings.allow_like,
-            "coin": settings.allow_coin,
-            "favorite": settings.allow_favorite,
-            "dynamic": settings.allow_dynamic,
-        },
-            "video": {
-                "mode": settings.video_mode,
-                "max_duration_seconds": settings.video_max_duration_seconds,
-                "frame_count": settings.video_frame_count,
-                "frame_note_mode": settings.frame_note_mode,
-                "visual_note_frame_interval": settings.visual_note_frame_interval,
-                "candidate_pool_size": settings.candidate_pool_size,
-                "visual_note_max_frames": settings.visual_note_max_frames,
-                "visual_note_grid_cols": settings.visual_note_grid_cols,
-                "visual_note_grid_rows": settings.visual_note_grid_rows,
-                "custom_video_prompt": settings.custom_video_prompt,
-                "download_interest_threshold": settings.video_download_interest_threshold,
-                "download_dir": settings.video_download_dir,
-                "delete_video_after_understand": settings.video_delete_after_understand,
-                "quality": settings.video_quality,
-            },
-        "proactive": {
-            "video_count": settings.proactive_video_count,
-            "comment_count": settings.proactive_comment_count,
-            "times_count": settings.proactive_times_count,
-            "sleep_start": settings.sleep_start,
-            "sleep_end": settings.sleep_end,
-        },
-        "features": {
-            "web_search": settings.enable_web_search,
-            "proactive": settings.enable_proactive,
-            "dynamic": settings.enable_dynamic,
-            "personality_evolution": settings.enable_personality_evolution,
-            "mood": settings.enable_mood,
-            "affection": settings.enable_affection,
-            "embedding_memory": settings.enable_embedding_memory,
-            "comment_poll_interval": settings.comment_poll_interval,
-            "max_replies_per_check": settings.max_replies_per_check,
-        },
-        "ai_marker": settings.ai_marker,
-    }

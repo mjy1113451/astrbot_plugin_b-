@@ -56,7 +56,7 @@ if _standalone_entry:
 # 插件版本的代码侧唯一来源，必须与 metadata.yaml 的 version 保持一致。
 # 其它位置（CLI 横幅、文档、依赖清单）不再硬编码版本号，升级时只改这里和
 # metadata.yaml 两处。
-PLUGIN_VERSION = "3.1.6"
+PLUGIN_VERSION = "3.1.7"
 
 # AstrBot 核心提供的依赖（插件 requirements.txt 不再声明，见 issues #18/#20）。
 # 值依次为 pip 包名（用于提示）与核心 v4.29.1 声明的最低版本。
@@ -213,6 +213,16 @@ class BilibiliLearningBot(Star):
             _runtime.configure_plugin(StarTools.get_data_dir(_runtime.PLUGIN_NAME))
         self.config = config
 
+    def _initialize_business_config(self):
+        """Initialize this profile and apply opted-in host settings before business imports."""
+        from .core.config import initialize_config
+
+        initialize_config()
+        if self.config is not None:
+            from .core.astrbot_config_bridge import apply_astrbot_config
+
+            apply_astrbot_config(self.config)
+
     @staticmethod
     def _run_in_thread(func):
         """在线程中执行阻塞的 CLI 菜单，避免阻塞事件循环。
@@ -252,13 +262,7 @@ class BilibiliLearningBot(Star):
                 return
 
             try:
-                from .core.config import initialize_config
-
-                initialize_config()
-                if self.config is not None:
-                    from .core.astrbot_config_bridge import apply_astrbot_config
-
-                    apply_astrbot_config(self.config)
+                self._initialize_business_config()
                 from .brain.agent_brain import AgentBrain
 
                 brain = AgentBrain()
@@ -444,9 +448,7 @@ class BilibiliLearningBot(Star):
             return
 
         try:
-            from .core.config import initialize_config
-
-            initialize_config()
+            self._initialize_business_config()
             from .brain.video_analysis import analyze_bilibili_video_input
 
             await analyze_bilibili_video_input(bvid)
@@ -470,9 +472,7 @@ class BilibiliLearningBot(Star):
             return
 
         try:
-            from .core.config import initialize_config
-
-            initialize_config()
+            self._initialize_business_config()
             from .brain.video_analysis import up_homepage_learn
 
             # 非交互调用：显式给出默认值，避免函数内部三个 input() 阻塞事件循环
@@ -501,9 +501,7 @@ class BilibiliLearningBot(Star):
                     "ℹ️ 用法：/bili_video2html <bv号/链接>\n例如：/bili_video2html BV1xx411c7mD"
                 )
                 return
-            from .core.config import initialize_config
-
-            initialize_config()
+            self._initialize_business_config()
             from .cli.app import video_to_html_bg
 
             await video_to_html_bg(query=bvid)

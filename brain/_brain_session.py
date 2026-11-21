@@ -5,6 +5,7 @@ from ..utils.display import log_exception
 from ..core.user_data import managed_file_path
 from ..api.throttle import _bili_throttle
 from ..core.platform_actions import public_commenting_enabled
+from ..core.action_permissions import allowed, require
 from ..core.time_policy import is_quiet_period
 
 class BrainSessionMixin:
@@ -303,6 +304,9 @@ class BrainSessionMixin:
             log_exception("主动聊天异常", e)
 
     async def _compose_active_chat(self, target_uid, target_name, target):
+        if not allowed("private_reply"):
+            log("主动私信未获授权，未发送", "WARN")
+            return False
         try:
             persona_block = self.persona_mgr.build_prompt_block()
             mood_block = self.mood_mgr.build_prompt_block()
@@ -353,13 +357,22 @@ class BrainSessionMixin:
                 log(f"主动聊天内容被拦截: {reason} | 命中: {', '.join(hits)}", "WARN")
                 return
             await asyncio.sleep(human_reply_delay())
+            if not allowed("private_reply"):
+                log("主动私信授权已撤销，未发送", "WARN")
+                return False
             result = await self.private_message_mgr.send_reply(target_uid, chat_text)
-            self._last_active_chat_at = datetime.now()
-            self._active_chat_count += 1
             if isinstance(result, dict) and result.get("queued"):
-                log(f"[MSG] 主动私信建议已提交审核 @{target_name}: {chat_text[:60]}", "CHAT")
+                self._last_active_chat_at = datetime.now()
+                log(f"[MSG] 主动私信建议已提交审核，尚未发送 @{target_name}: {chat_text[:60]}", "CHAT")
                 event_type = "active_chat_review"
+            elif result is False or (isinstance(result, dict) and (
+                result.get("sent") is False or result.get("code") not in (None, 0, "0")
+            )):
+                log(f"[MSG] 主动私信未发送 @{target_name}", "WARN")
+                return False
             else:
+                self._last_active_chat_at = datetime.now()
+                self._active_chat_count += 1
                 log(f"[MSG] 已主动发消息给 @{target_name}: {chat_text[:60]}", "CHAT")
                 event_type = "active_chat"
             self.record_session_event(
@@ -432,6 +445,9 @@ class BrainSessionMixin:
         return True
 
     async def maybe_follow_up(self, up_uid: int, up_name: str, score: float):
+        if not allowed("follow_up"):
+            log("关注 UP 主未获授权，未执行，也未提交审核", "WARN")
+            return False
         if not UP_FOLLOW_ENABLED or not up_uid or not up_name:
             return False
         self._reset_daily_follows()
@@ -457,8 +473,14 @@ class BrainSessionMixin:
         adjusted_prob = UP_FOLLOW_AUTO_PROB * score_factor * impression_bonus
         if not exceptional and random.random() >= adjusted_prob:
             return False
+        if not allowed("follow_up"):
+            log("关注 UP 主授权已撤销，未执行，也未提交审核", "WARN")
+            return False
         from ..services.like_review import ActionReviewInbox, requires_review
         if requires_review(config, "follow_up"):
+            if not allowed("follow_up"):
+                log("关注 UP 主授权已撤销，未提交审核", "WARN")
+                return False
             ActionReviewInbox(DATA_DIR).propose(
                 "follow_up",
                 f"关注 UP 主 @{up_name}",
@@ -473,6 +495,7 @@ class BrainSessionMixin:
         try:
             avg_str = f", 均分:{avg_score:.1f}" if views else ""
             log(f"[*] 正在关注 UP主 @{up_name} (UID:{up_uid})... (评分:{score}, 观看{views}次{avg_str}, 概率:{adjusted_prob:.3f})", "FOLLOW")
+            require("follow_up")
             result = await self.bili.follow_up(up_uid)
             if result.get("code") == 0:
                 self.daily_follows += 1
@@ -603,6 +626,9 @@ class BrainSessionMixin:
         return []
 
     async def maybe_like_danmaku(self, bvid: str, danmaku_list: list, cid: int = 0):
+        if not allowed("danmaku_like"):
+            log("弹幕点赞未获授权，未执行", "WARN")
+            return False
         danmaku_cfg = config.get("danmaku", {}) if isinstance(config, dict) else {}
         if not danmaku_cfg.get("enabled", True) or not danmaku_list:
             return False
@@ -631,6 +657,7 @@ class BrainSessionMixin:
             if not dm_id_str:
                 return False
             log(f"👍 点赞弹幕: {dm_text[:30]}... (id_str={dm_id_str[:16]}...)", "DANMAKU")
+            require("danmaku_like")
             result = await self.bili.like_danmaku(dmid=dm_id_str, cid=cid, bvid=bvid)
             if result.get("code") == 0:
                 self.daily_danmaku_likes += 1
@@ -643,6 +670,9 @@ class BrainSessionMixin:
         return False
 
     async def maybe_send_danmaku(self, bvid: str, title: str = "", subtitle_text: str = ""):
+        if not allowed("send_danmaku"):
+            log("发送弹幕未获授权，未发送，也未提交审核", "WARN")
+            return False
         danmaku_cfg = config.get("danmaku", {}) if isinstance(config, dict) else {}
         if not danmaku_cfg.get("enabled", True) or not bvid:
             return False
@@ -675,8 +705,10 @@ class BrainSessionMixin:
             dm_text = resp.choices[0].message.content.strip()
             if not dm_text or len(dm_text) > 50:
                 return False
+            require("send_danmaku")
             from ..services.like_review import ActionReviewInbox, requires_review
             if requires_review(config, "send_danmaku"):
+                require("send_danmaku")
                 ActionReviewInbox(DATA_DIR).propose(
                     "send_danmaku",
                     f"向视频 {bvid} 发送弹幕",
@@ -688,6 +720,7 @@ class BrainSessionMixin:
                 log("AI 弹幕建议已进入行为审核，等待用户决定", "INFO")
                 return False
             log("准备发送弹幕", "DANMAKU")
+            require("send_danmaku")
             result = await self.bili.send_danmaku(bvid, dm_text)
             if result.get("code") == 0:
                 self.daily_danmaku_sent += 1
