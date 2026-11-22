@@ -66,8 +66,6 @@ git clone https://github.com/mjy1113451/astrbot_plugin_b-.git
 
 安装后在 AstrBot 插件管理页启用，并向机器人发送 `/bili_start`。
 
-> 也可以直接 `python main.py` 以独立 CLI 模式运行（扫码登录、兴趣 / 评论设置、导出导入、恢复出厂等交互菜单只在终端可用）。
-
 ---
 
 ## 指令一览
