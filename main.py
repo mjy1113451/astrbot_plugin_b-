@@ -279,24 +279,41 @@ class BilibiliLearningBot(Star):
         await self._brain_runtime.terminate()
 
     @staticmethod
-    def _unmanaged_state():
+    def _unmanaged_state(scope="bili_stop"):
+        """Describe why this instance has no managed task, without implying a global stop.
+
+        Args:
+            scope: "bili_stop" or "bili_status" selects the command-specific framing.
+                Both only inspect this plugin instance and this profile's lock file.
+
+        Only an owned-task cleanup may be reported as stopped (issue #49): another
+        AstrBot instance, a standalone CLI entry or an older unmanaged task can still
+        be running while this instance has no task handle.
+        """
         try:
             from .utils.lock import bot_lock_status
 
             status = bot_lock_status(clean_stale=False)
             if status["stale"]:
-                detail = "发现陈旧锁；本命令未删除锁文件。"
+                detail = "当前 profile 的锁由已退出的进程遗留，本命令未删除该锁文件。"
             elif status["locked"]:
-                detail = "存在未由当前实例管理的运行或锁占用；本命令无法停止它。"
+                detail = "当前 profile 存在未由当前实例管理的运行或锁占用，本命令无法停止它。"
                 if status["pid"] is None:
                     detail += "锁持有者状态未知。"
                 detail += "请先从原启动入口停止；若是旧版重载遗留任务，请在维护时重启宿主。"
             else:
-                detail = "当前 profile 未发现锁占用；这不代表其他入口或进程没有运行。"
+                detail = "当前 profile 未发现锁占用，但这不能证明其他入口或进程没有运行。"
         except Exception as exc:
             _log_exception("读取机器人锁状态", exc)
-            detail = "当前 profile 的锁状态未知；无法确认是否有其他运行。"
-        return "当前实例未登记受管任务。" + detail
+            detail = "当前 profile 的锁状态未知，无法确认其他入口是否仍在运行。"
+        if scope == "bili_status":
+            return "ℹ️ 当前实例未登记受管任务，机器人主循环不由当前插件实例管理。" + detail
+        return (
+            "ℹ️ 当前实例未登记受管任务：本命令没有停止任何任务，"
+            "也不覆盖其他插件实例、CLI 入口或其他进程。"
+            + detail
+            + "只有当前实例的受管任务完成清理时才会提示停止成功。"
+        )
 
     def _initialize_business_config(self):
         """Initialize this profile and apply opted-in host settings before business imports."""
@@ -369,7 +386,7 @@ class BilibiliLearningBot(Star):
         runtime = self._brain_runtime
         task, requested = await runtime.request_stop()
         if task is None:
-            yield event.plain_result("ℹ️ " + self._unmanaged_state())
+            yield event.plain_result(self._unmanaged_state("bili_stop"))
             return
         if not requested:
             yield event.plain_result("⏳ 机器人正在停止中，请稍候。")
@@ -735,7 +752,7 @@ class BilibiliLearningBot(Star):
         """查看后台任务状态。"""
         state = await self._brain_runtime.state()
         if state == "idle":
-            yield event.plain_result("ℹ️ " + self._unmanaged_state())
+            yield event.plain_result(self._unmanaged_state("bili_status"))
         elif state == "stopping":
             yield event.plain_result("机器人主循环: 停止中，正在等待当前实例的受管任务收尾。")
         else:

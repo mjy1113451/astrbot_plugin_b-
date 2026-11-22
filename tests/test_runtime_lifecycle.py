@@ -386,7 +386,7 @@ class RuntimeLifecycleTests(unittest.IsolatedAsyncioTestCase):
             ({"locked": True, "pid": 123, "stale": False}, "存在未由当前实例管理的运行或锁占用"),
             ({"locked": True, "pid": None, "stale": False}, "状态未知"),
             ({"locked": False, "pid": None, "stale": False}, "未发现锁占用"),
-            ({"locked": False, "pid": 123, "stale": True}, "陈旧锁"),
+            ({"locked": False, "pid": 123, "stale": True}, "已退出的进程遗留"),
         )
         for snapshot, expected in cases:
             with self.subTest(snapshot=snapshot):
@@ -399,6 +399,25 @@ class RuntimeLifecycleTests(unittest.IsolatedAsyncioTestCase):
                     self.assertNotIn("已停止", text)
                 self.runtime.lock.bot_lock_status.assert_called_with(clean_stale=False)
                 self.runtime.app._release_bot_lock.assert_not_called()
+
+    async def test_stop_idle_reply_says_it_stopped_nothing_and_other_entries_may_run(self):
+        """Issue #49: an empty task handle must not read as "the bot is stopped"."""
+        for snapshot in (
+            {"locked": True, "pid": 123, "stale": False},
+            {"locked": True, "pid": None, "stale": False},
+            {"locked": False, "pid": None, "stale": False},
+            {"locked": False, "pid": 123, "stale": True},
+        ):
+            with self.subTest(snapshot=snapshot):
+                self.runtime.lock.bot_lock_status.return_value = snapshot
+                text = (await self.stop())[0]
+                self.assertIn("本命令没有停止任何任务", text)
+                self.assertIn("其他插件实例、CLI 入口或其他进程", text)
+                self.assertNotIn("已停止", text)
+                # The status command shares the diagnostic but never claims to stop.
+                status = (await self.status())[0]
+                self.assertNotIn("本命令没有停止任何任务", status)
+                self.assertIn("不由当前插件实例管理", status)
 
     async def test_lock_read_failure_reports_unknown_without_exception_body(self):
         self.runtime.lock.bot_lock_status.side_effect = OSError("PRIVATE_LOCK_CANARY")
