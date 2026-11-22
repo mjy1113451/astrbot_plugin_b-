@@ -123,15 +123,6 @@ if _missing_core_deps:
           "修复后可直接重新发送 /bili_start，无需重启 AstrBot。"
     )
 
-_brain_task: asyncio.Task | None = None
-"""后台运行的 AgentBrain 任务，None 表示当前没有任务。"""
-
-_brain_stopping = False
-"""停止流程进行中标记，避免并发 stop 重复取消任务或误报“已停止”。"""
-
-_brain_task_lock = asyncio.Lock()
-"""串行化 start/stop 对 _brain_task 的状态切换，避免并发指令下引用被写乱。"""
-
 
 def _cli_app():
     """延迟导入 CLI 模块。
@@ -175,30 +166,99 @@ def _log_exception(action: str, exc: BaseException) -> None:
     log_exception(f"{action}失败", exc)
 
 
-def _on_brain_done(task: asyncio.Task) -> None:
-    """后台任务结束时的回调：清理引用并记录异常。
+class _BrainRuntime:
+    """Own one plugin instance's task, including its asynchronous cleanup."""
 
-    Args:
-        task: 已结束的后台任务。
-    """
-    global _brain_task, _brain_stopping
-    is_current = _brain_task is task
-    if is_current:
-        _brain_task = None
-        _brain_stopping = False
-    # 单实例锁只在当前任务真正结束时释放：避免过期回调误释放已被新任务持有的锁，
-    # 也避免 stop 超时后锁被提前释放导致多实例竞争
-    if is_current:
+    def __init__(self):
+        self.task: asyncio.Task | None = None
+        self.brain = None
+        self.stopping = False
+        self.closed = False
+        self.lock = asyncio.Lock()
+        self.stop_timeout = 10.0
+        self._log_error = _log_exception
+        self._log_info = logger.info
+
+    def _on_done(self, task):
+        if self.task is not task:
+            return
+        cleanup = getattr(self.brain, "_cleanup_task", None)
+        if cleanup is not None and cleanup is not task and not cleanup.done():
+            self.task = cleanup
+            cleanup.add_done_callback(self._on_done)
+            return
+        self.task = None
+        self.brain = None
+        self.stopping = False
+        if task.cancelled():
+            self._log_info("当前实例的 B站学习机器人受管任务已结束")
+        else:
+            exc = task.exception()
+            if exc is not None:
+                self._log_error("B站学习机器人后台任务异常退出", exc)
+
+    def start(self, brain):
+        self.brain = brain
+        self.task = asyncio.create_task(brain.run(), name="bili_learning_brain")
+        self.stopping = False
+        self.task.add_done_callback(self._on_done)
+
+    async def state(self):
+        async with self.lock:
+            if self.task is not None and self.task.done():
+                self._on_done(self.task)
+            if self.task is None:
+                return "idle"
+            return "stopping" if self.is_stopping() else "running"
+
+    def is_stopping(self):
+        return self.stopping or getattr(self.brain, "_closing", False) is True
+
+    async def request_stop(self):
+        async with self.lock:
+            task = self.task
+            if task is not None and task.done():
+                self._on_done(task)
+                task = self.task
+            if task is None:
+                return None, False
+            if self.is_stopping():
+                return task, False
+            self.stopping = True
+            # Let an already queued run enter its try/finally before cancellation.
+            asyncio.get_running_loop().call_soon(task.cancel)
+            return task, True
+
+    async def wait(self, task, *, timeout=None):
+        # wait_for would cancel the target again on timeout or caller cancellation.
+        brain = self.brain if self.task is task else None
+        loop = asyncio.get_running_loop()
+        deadline = None if timeout is None else loop.time() + timeout
+        while True:
+            remaining = None if deadline is None else max(0, deadline - loop.time())
+            done, _ = await asyncio.wait((task,), timeout=remaining)
+            if not done:
+                return False
+            self._on_done(task)
+            cleanup = getattr(brain, "_cleanup_task", None)
+            if cleanup is None or cleanup is task or cleanup.done():
+                return True
+            task = cleanup
+
+    async def terminate(self):
+        self.closed = True
+
+        async def drain():
+            task, _ = await self.request_stop()
+            if task is not None:
+                await self.wait(task)
+
         try:
-            _cli_app()._release_bot_lock()
-        except Exception as exc:
-            _log_exception("释放机器人锁", exc)
-    if task.cancelled():
-        logger.info("B站学习机器人已被停止")
-        return
-    exc = task.exception()
-    if exc is not None:
-        _log_exception("B站学习机器人后台任务异常退出", exc)
+            await drain()
+        except asyncio.CancelledError:
+            # A second cancellation ends the caller's wait, not the owned work.
+            await drain()
+            raise
 
 
 class BilibiliLearningBot(Star):
@@ -212,6 +272,31 @@ class BilibiliLearningBot(Star):
 
             _runtime.configure_plugin(StarTools.get_data_dir(_runtime.PLUGIN_NAME))
         self.config = config
+        self._brain_runtime = _BrainRuntime()
+
+    async def terminate(self):
+        """Wait for this instance's registered work before the host unloads it."""
+        await self._brain_runtime.terminate()
+
+    @staticmethod
+    def _unmanaged_state():
+        try:
+            from .utils.lock import bot_lock_status
+
+            status = bot_lock_status(clean_stale=False)
+            if status["stale"]:
+                detail = "发现陈旧锁；本命令未删除锁文件。"
+            elif status["locked"]:
+                detail = "存在未由当前实例管理的运行或锁占用；本命令无法停止它。"
+                if status["pid"] is None:
+                    detail += "锁持有者状态未知。"
+                detail += "请先从原启动入口停止；若是旧版重载遗留任务，请在维护时重启宿主。"
+            else:
+                detail = "当前 profile 未发现锁占用；这不代表其他入口或进程没有运行。"
+        except Exception as exc:
+            _log_exception("读取机器人锁状态", exc)
+            detail = "当前 profile 的锁状态未知；无法确认是否有其他运行。"
+        return "当前实例未登记受管任务。" + detail
 
     def _initialize_business_config(self):
         """Initialize this profile and apply opted-in host settings before business imports."""
@@ -240,7 +325,7 @@ class BilibiliLearningBot(Star):
     @filter.command("bili_start")
     async def start_bot(self, event: AstrMessageEvent):
         """在后台启动 B站学习机器人。"""
-        global _brain_task, _missing_core_deps
+        global _missing_core_deps
         # 每次启动前重新检查，而不是只用导入期快照：用户装好依赖后无需重启核心。
         _missing_core_deps = _check_core_dependencies()
         if _missing_core_deps:
@@ -251,73 +336,49 @@ class BilibiliLearningBot(Star):
                   "修复后可直接重新发送 /bili_start，无需重启 AstrBot。"
             )
             return
-        async with _brain_task_lock:
-            if _brain_stopping:
-                yield event.plain_result("⏳ 机器人正在停止中，请稍后再启动。")
-                return
-            if _brain_task is not None and not _brain_task.done():
-                yield event.plain_result(
-                    "⚠️ 机器人已在后台运行。发送 /bili_status 查看状态，或发送 /bili_stop 停止。"
-                )
-                return
+        runtime = self._brain_runtime
+        async with runtime.lock:
+            if runtime.task is not None and runtime.task.done():
+                runtime._on_done(runtime.task)
+            if runtime.closed:
+                reply = "⏳ 当前插件实例已进入卸载流程，不能再启动。"
+            elif runtime.is_stopping():
+                reply = "⏳ 机器人正在停止中，请稍后再启动。"
+            elif runtime.task is not None:
+                reply = "⚠️ 机器人已在后台运行。发送 /bili_status 查看状态，或发送 /bili_stop 停止。"
+            else:
+                try:
+                    self._initialize_business_config()
+                    from .brain.agent_brain import AgentBrain
 
-            try:
-                self._initialize_business_config()
-                from .brain.agent_brain import AgentBrain
-
-                brain = AgentBrain()
-            except Exception as exc:
-                _log_exception("初始化机器人", exc)
-                yield event.plain_result(f"❌ 机器人初始化失败（{type(exc).__name__}，详情见日志）")
-                return
-
-            _brain_task = asyncio.create_task(brain.run(), name="bili_learning_brain")
-            _brain_task.add_done_callback(_on_brain_done)
-        yield event.plain_result(
-            "✅ 已在后台启动 B站学习机器人，本指令不会阻塞其他对话。"
-            "发送 /bili_stop 可停止。"
-        )
+                    brain = AgentBrain()
+                    runtime.start(brain)
+                except Exception as exc:
+                    _log_exception("初始化机器人", exc)
+                    reply = f"❌ 机器人初始化失败（{type(exc).__name__}，详情见日志）"
+                else:
+                    reply = (
+                        "✅ 已在后台启动 B站学习机器人，本指令不会阻塞其他对话。"
+                        "发送 /bili_stop 可停止。"
+                    )
+        yield event.plain_result(reply)
 
     @filter.command("bili_stop")
     async def stop_bot(self, event: AstrMessageEvent):
         """停止后台运行的 B站学习机器人。"""
-        global _brain_stopping
-        reply = ""
-        async with _brain_task_lock:
-            task = _brain_task
-            if task is None or task.done():
-                reply = "ℹ️ 当前没有正在运行的机器人。"
-            elif _brain_stopping:
-                reply = "⏳ 机器人正在停止中，请稍候。"
-            else:
-                # 在锁内置位“停止中”并取消，保证并发 stop 只有一个进入等待流程
-                _brain_stopping = True
-                task.cancel()
-
-        if reply:
-            yield event.plain_result(reply)
+        runtime = self._brain_runtime
+        task, requested = await runtime.request_stop()
+        if task is None:
+            yield event.plain_result("ℹ️ " + self._unmanaged_state())
+            return
+        if not requested:
+            yield event.plain_result("⏳ 机器人正在停止中，请稍候。")
             return
 
-        # 等任务真正退出（含 AgentBrain 自身的收尾）。锁由 _on_brain_done
-        # 在任务结束时统一释放；超时则保留任务引用与锁，避免误报"已停止"
-        stopped = False
-        try:
-            await asyncio.wait_for(task, timeout=10.0)
-            stopped = True
-        except asyncio.CancelledError:
-            # 只有任务自身被取消才算停止；本协程被取消时继续向上传播
-            if not task.cancelled():
-                raise
-            stopped = True
-        except asyncio.TimeoutError:
-            logger.warning("B站学习机器人 10 秒内未完成收尾，保留任务引用与单实例锁")
-        except Exception as exc:
-            _log_exception("等待机器人停止", exc)
-
-        # 仅在实际观察到任务结束（done）时才报告“已停止”
-        if stopped or task.done():
-            yield event.plain_result("✅ 已停止 B站学习机器人。")
+        if await runtime.wait(task, timeout=runtime.stop_timeout):
+            yield event.plain_result("✅ 当前实例的 B站学习机器人受管任务已停止。")
         else:
+            logger.warning("B站学习机器人尚未完成收尾，保留任务引用与单实例锁")
             yield event.plain_result(
                 "⏳ 已请求停止，但机器人仍在收尾。收尾完成前无法重新启动，请稍后再试。"
             )
@@ -672,15 +733,13 @@ class BilibiliLearningBot(Star):
     @filter.command("bili_status")
     async def status(self, event: AstrMessageEvent):
         """查看后台任务状态。"""
-        try:
-            app = _cli_app()
-            app._show_bg_tasks()
-        except Exception as exc:
-            _log_exception("查看后台任务", exc)
-            yield event.plain_result(f"❌ 查看后台任务失败（{type(exc).__name__}，详情见日志）")
-            return
-        state = "运行中" if _brain_task and not _brain_task.done() else "未运行"
-        yield event.plain_result(f"机器人主循环: {state}，后台任务详情见日志。")
+        state = await self._brain_runtime.state()
+        if state == "idle":
+            yield event.plain_result("ℹ️ " + self._unmanaged_state())
+        elif state == "stopping":
+            yield event.plain_result("机器人主循环: 停止中，正在等待当前实例的受管任务收尾。")
+        else:
+            yield event.plain_result("机器人主循环: 运行中，由当前插件实例管理。")
 
 
 def _run_cli_main() -> None:

@@ -51,19 +51,31 @@ class BackgroundRuntimeTests(unittest.IsolatedAsyncioTestCase):
         interests = ModuleType(PACKAGE + ".services.interest_engine")
         interests.get_engine = lambda: SimpleNamespace(get_keywords=lambda: [])
         sys.modules.update({PACKAGE: package, services.__name__: services, interests.__name__: interests})
-        self.namespace.update(_acquire_bot_lock=lambda: True, KNOWLEDGE_BASE_DIR=str(self.temp / "kb"))
-        fn = extract("brain/_brain_loop.py", "run", self.namespace)
+        release = Mock()
+        self.namespace.update(_acquire_bot_lock=lambda: True, _release_bot_lock=release,
+                              KNOWLEDGE_BASE_DIR=str(self.temp / "kb"))
+        tree = ast.parse((ROOT / "brain/_brain_loop.py").read_text(encoding="utf-8"))
+        mixin = next(node for node in tree.body
+                     if isinstance(node, ast.ClassDef) and node.name == "BrainLoopMixin")
+        exec(compile(ast.fix_missing_locations(ast.Module(body=[mixin], type_ignores=[])),
+                     str(ROOT / "brain/_brain_loop.py"), "exec"), self.namespace)
         classifier = SimpleNamespace(show_category_structure=Mock(side_effect=AssertionError("tree printed")),
                                      cleanup_empty_folders=lambda: 0)
-        brain = SimpleNamespace(update_runtime_clock=Mock(), previous_seen_at="",
-                                interest_mgr=SimpleNamespace(get_interests=lambda: []),
-                                persona_mgr=SimpleNamespace(get_active_persona=lambda: "test-persona"),
-                                mood_mgr=SimpleNamespace(get_current=lambda: "test-mood"),
-                                classifier=classifier, initialize_login=AsyncMock(return_value=False))
+        brain = self.namespace["BrainLoopMixin"]()
+        brain.update_runtime_clock = Mock()
+        brain.previous_seen_at = ""
+        brain.interest_mgr = SimpleNamespace(get_interests=lambda: [])
+        brain.persona_mgr = SimpleNamespace(get_active_persona=lambda: "test-persona")
+        brain.mood_mgr = SimpleNamespace(get_current=lambda: "test-mood")
+        brain.classifier = classifier
+        brain.initialize_login = AsyncMock(return_value=False)
+        brain.bili = SimpleNamespace(close=AsyncMock())
         with patch("builtins.print", side_effect=AssertionError("plugin printed startup")):
-            await fn(brain)
+            await brain.run()
         classifier.show_category_structure.assert_not_called()
         brain.initialize_login.assert_awaited_once()
+        brain.bili.close.assert_awaited_once_with()
+        release.assert_called_once_with()
 
     async def test_learning_failure_uses_exception_helper_not_raw_message(self):
         self.namespace.update(AI_SUBTITLE_VERIFY_ENABLED=False, LEARN_MIN_SCORE=6, config={})

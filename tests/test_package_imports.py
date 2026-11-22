@@ -91,6 +91,7 @@ class _PackageEnvironment:
                                  for package in PACKAGES}
         self.unexpected_imports = []
         self.loaded_mains = []
+        self.bots = []
         self.logger = Mock()
         self.original_import = builtins.__import__
 
@@ -162,7 +163,9 @@ class _PackageEnvironment:
 
     def construct_bot(self, main, config=None):
         self.star_tools.get_data_dir.return_value = self.plugin_data_dirs[main.__package__]
-        return main.BilibiliLearningBot(None, config)
+        bot = main.BilibiliLearningBot(None, config)
+        self.bots.append(bot)
+        return bot
 
     def install_package(self, package, child):
         name = package + "." + child
@@ -196,6 +199,8 @@ class _PackageEnvironment:
         display = self.install(_module(package + ".utils.display"))
         display.log = Mock()
         display.log_exception = Mock()
+        lock = self.install(_module(package + ".utils.lock"))
+        lock.bot_lock_status = Mock(return_value={"locked": False, "pid": None, "stale": False})
         bridge = None
         if with_bridge:
             self.install_package(package, "core")
@@ -204,7 +209,7 @@ class _PackageEnvironment:
         config = self.install(_module(package + ".core.config"))
         config.initialize_config = Mock()
         return SimpleNamespace(app=app, brain=brain, video=video, bridge=bridge, config=config,
-                               display=display, finished=finished)
+                               display=display, lock=lock, finished=finished)
 
     def load_real_bridge(self, package):
         self.install_package(package, "core")
@@ -328,16 +333,21 @@ class PackageImportTests(_PackageTestMixin, unittest.TestCase):
                 for config in (None, {"use_astrbot_config": True}):
                     bot = self.environment.construct_bot(main, config)
                     self.assertIs(bot.config, config)
+                    self.assertIsInstance(bot._brain_runtime, main._BrainRuntime)
+                    self.assertIsNone(bot._brain_runtime.task)
+                    self.assertFalse(bot._brain_runtime.stopping)
                     self.assertTrue(runtime.plugin_mode)
                     self.assertEqual(runtime.data_root, self.environment.plugin_data_dirs[package].resolve())
                 self.assertEqual(get_data_dir.call_args_list, [call(runtime.PLUGIN_NAME)] * 2)
                 loaded = {name for name in sys.modules
                           if name == package or name.startswith(package + ".")}
                 self.assertEqual(loaded, {package, package + ".main", package + "._runtime"})
-                self.assertIsNone(main._brain_task)
                 self.environment.assert_isolated(self)
+        owners = [bot._brain_runtime for bot in self.environment.bots]
+        self.assertEqual(len(owners), 4)
+        self.assertEqual(len({id(owner) for owner in owners}), len(owners))
+        self.assertEqual(len({id(owner.lock) for owner in owners}), len(owners))
         self.assertNotEqual(Path(mains[0].__file__).parent, Path(mains[1].__file__).parent)
-        self.assertIsNot(mains[0]._brain_task_lock, mains[1]._brain_task_lock)
         self.assertIsNot(mains[0]._runtime, mains[1]._runtime)
         self.assertNotEqual(mains[0]._runtime.data_root, mains[1]._runtime.data_root)
 
@@ -381,7 +391,7 @@ class PackageImportTests(_PackageTestMixin, unittest.TestCase):
     def test_namespace_cleanup_allows_fresh_entry_and_cli_reload(self):
         first = self.environment.load_main(PACKAGE_A)
         first_package = sys.modules[PACKAGE_A]
-        self.environment.construct_bot(first)
+        first_bot = self.environment.construct_bot(first)
         first_runtime = first._runtime
         first_app = self.environment.install_cli(PACKAGE_A)
         other = self.environment.load_main(PACKAGE_B)
@@ -400,8 +410,10 @@ class PackageImportTests(_PackageTestMixin, unittest.TestCase):
         self.assertIsNone(reloaded._runtime.data_root)
         self.assertTrue(first_runtime.plugin_mode)
         self.assertEqual(first_runtime.data_root, self.environment.plugin_data_dirs[PACKAGE_A].resolve())
-        self.assertIsNone(reloaded._brain_task)
-        self.assertIsNot(reloaded._brain_task_lock, first._brain_task_lock)
+        reloaded_bot = self.environment.construct_bot(reloaded)
+        self.assertIsNone(reloaded_bot._brain_runtime.task)
+        self.assertIsNot(reloaded_bot._brain_runtime, first_bot._brain_runtime)
+        self.assertIsNot(reloaded_bot._brain_runtime.lock, first_bot._brain_runtime.lock)
         self.assertNotIn(PACKAGE_A + ".cli", sys.modules)
         replacement = self.environment.install_cli(PACKAGE_A)
         self.assertIsNot(replacement, first_app)
@@ -413,8 +425,8 @@ class PackageImportTests(_PackageTestMixin, unittest.TestCase):
 
 class PackageStartBotTests(_PackageTestMixin, unittest.IsolatedAsyncioTestCase):
     async def asyncTearDown(self):
-        tasks = {main._brain_task for main in self.environment.loaded_mains
-                 if main._brain_task is not None}
+        tasks = {bot._brain_runtime.task for bot in self.environment.bots
+                 if bot._brain_runtime.task is not None}
         for task in tasks:
             if not task.done():
                 task.cancel()
@@ -422,14 +434,13 @@ class PackageStartBotTests(_PackageTestMixin, unittest.IsolatedAsyncioTestCase):
             await asyncio.gather(*tasks, return_exceptions=True)
             await asyncio.sleep(0)
 
-    async def start(self, main, config=None):
+    async def start(self, bot):
         event = SimpleNamespace(plain_result=lambda text: text)
-        bot = self.environment.construct_bot(main, config)
         replies = [reply async for reply in bot.start_bot(event)]
         self.assertEqual(len(replies), 1)
         self.assertIn("已在后台启动", replies[0])
-        self.assertIsNotNone(main._brain_task)
-        return main._brain_task
+        self.assertIsNotNone(bot._brain_runtime.task)
+        return bot._brain_runtime.task
 
     async def settle(self, task):
         await asyncio.gather(task, return_exceptions=True)
@@ -444,7 +455,8 @@ class PackageStartBotTests(_PackageTestMixin, unittest.IsolatedAsyncioTestCase):
                 calls = Mock()
                 calls.attach_mock(runtime.config.initialize_config, "initialize")
                 calls.attach_mock(runtime.brain.AgentBrain, "brain")
-                tasks.append(await self.start(main))
+                bot = self.environment.construct_bot(main)
+                tasks.append(await self.start(bot))
                 runtime.config.initialize_config.assert_called_once_with()
                 runtime.brain.AgentBrain.assert_called_once_with()
                 self.assertEqual(calls.mock_calls, [call.initialize(), call.brain()])
@@ -462,7 +474,8 @@ class PackageStartBotTests(_PackageTestMixin, unittest.IsolatedAsyncioTestCase):
                 calls = Mock()
                 calls.attach_mock(runtime.bridge.apply_astrbot_config, "apply")
                 calls.attach_mock(runtime.brain.AgentBrain, "brain")
-                await self.start(main, panel)
+                bot = self.environment.construct_bot(main, panel)
+                await self.start(bot)
                 self.assertEqual(calls.mock_calls, [call.apply(panel), call.brain()])
                 self.assertIs(runtime.bridge.apply_astrbot_config.call_args.args[0], panel)
                 self.environment.assert_isolated(self)
@@ -484,8 +497,9 @@ class PackageStartBotTests(_PackageTestMixin, unittest.IsolatedAsyncioTestCase):
                         imports.append(name)
                     return self.environment.guarded_import(name, globals, locals, fromlist, level)
 
+                bot = self.environment.construct_bot(main, panel)
                 with patch("builtins.__import__", new=import_after_initialization):
-                    await self.start(main, panel)
+                    await self.start(bot)
                 runtime.config.initialize_config.assert_called_once_with()
                 self.assertEqual(imports, ["core.astrbot_config_bridge", "brain.agent_brain"])
                 runtime.bridge.apply_astrbot_config.assert_called_once_with(panel)
@@ -511,7 +525,7 @@ class PackageStartBotTests(_PackageTestMixin, unittest.IsolatedAsyncioTestCase):
                 runtime.bridge.apply_astrbot_config.assert_not_called()
                 runtime.brain.AgentBrain.assert_not_called()
                 runtime.app._release_bot_lock.assert_not_called()
-                self.assertIsNone(main._brain_task)
+                self.assertIsNone(bot._brain_runtime.task)
                 self.environment.assert_isolated(self)
 
     async def test_bridge_failure_does_not_create_a_brain_or_background_task(self):
@@ -529,66 +543,83 @@ class PackageStartBotTests(_PackageTestMixin, unittest.IsolatedAsyncioTestCase):
                 runtime.bridge.apply_astrbot_config.assert_called_once_with(panel)
                 runtime.brain.AgentBrain.assert_not_called()
                 runtime.app._release_bot_lock.assert_not_called()
-                self.assertIsNone(main._brain_task)
+                self.assertIsNone(bot._brain_runtime.task)
                 self.environment.assert_isolated(self)
 
-    async def test_cancelled_task_releases_only_its_own_cli_lock(self):
+    async def test_cancelled_task_clears_only_its_owner_without_releasing_cli_locks(self):
         mains = {package: self.environment.load_main(package) for package in PACKAGES}
         runtimes = {package: self.environment.install_runtime(package) for package in PACKAGES}
-        tasks = {package: await self.start(mains[package]) for package in PACKAGES}
+        bots = {package: self.environment.construct_bot(mains[package]) for package in PACKAGES}
+        tasks = {package: await self.start(bots[package]) for package in PACKAGES}
         await asyncio.sleep(0)
         tasks[PACKAGE_A].cancel()
         await self.settle(tasks[PACKAGE_A])
         self.assertTrue(tasks[PACKAGE_A].cancelled())
-        self.assertIsNone(mains[PACKAGE_A]._brain_task)
-        self.assertFalse(mains[PACKAGE_A]._brain_stopping)
-        runtimes[PACKAGE_A].app._release_bot_lock.assert_called_once_with()
+        self.assertIsNone(bots[PACKAGE_A]._brain_runtime.task)
+        self.assertFalse(bots[PACKAGE_A]._brain_runtime.stopping)
+        runtimes[PACKAGE_A].app._release_bot_lock.assert_not_called()
         runtimes[PACKAGE_B].app._release_bot_lock.assert_not_called()
-        self.assertIs(mains[PACKAGE_B]._brain_task, tasks[PACKAGE_B])
+        self.assertIs(bots[PACKAGE_B]._brain_runtime.task, tasks[PACKAGE_B])
+        self.assertFalse(bots[PACKAGE_B]._brain_runtime.stopping)
         self.assertFalse(tasks[PACKAGE_B].done())
 
         tasks[PACKAGE_B].cancel()
         await self.settle(tasks[PACKAGE_B])
-        self.assertIsNone(mains[PACKAGE_B]._brain_task)
-        runtimes[PACKAGE_B].app._release_bot_lock.assert_called_once_with()
-        runtimes[PACKAGE_A].app._release_bot_lock.assert_called_once_with()
+        self.assertIsNone(bots[PACKAGE_B]._brain_runtime.task)
+        self.assertFalse(bots[PACKAGE_B]._brain_runtime.stopping)
+        runtimes[PACKAGE_B].app._release_bot_lock.assert_not_called()
+        runtimes[PACKAGE_A].app._release_bot_lock.assert_not_called()
         self.environment.assert_isolated(self)
 
-    async def test_completed_task_releases_only_its_own_cli_lock(self):
+    async def test_completed_task_clears_only_its_owner_without_releasing_cli_locks(self):
         mains = {package: self.environment.load_main(package) for package in PACKAGES}
         runtimes = {package: self.environment.install_runtime(package) for package in PACKAGES}
-        tasks = {package: await self.start(mains[package]) for package in PACKAGES}
+        bots = {package: self.environment.construct_bot(mains[package]) for package in PACKAGES}
+        tasks = {package: await self.start(bots[package]) for package in PACKAGES}
         runtimes[PACKAGE_A].finished.set()
         await self.settle(tasks[PACKAGE_A])
         self.assertFalse(tasks[PACKAGE_A].cancelled())
         self.assertIsNone(tasks[PACKAGE_A].exception())
-        self.assertIsNone(mains[PACKAGE_A]._brain_task)
-        runtimes[PACKAGE_A].app._release_bot_lock.assert_called_once_with()
+        self.assertIsNone(bots[PACKAGE_A]._brain_runtime.task)
+        self.assertFalse(bots[PACKAGE_A]._brain_runtime.stopping)
+        runtimes[PACKAGE_A].app._release_bot_lock.assert_not_called()
         runtimes[PACKAGE_B].app._release_bot_lock.assert_not_called()
-        self.assertIs(mains[PACKAGE_B]._brain_task, tasks[PACKAGE_B])
+        self.assertIs(bots[PACKAGE_B]._brain_runtime.task, tasks[PACKAGE_B])
+        self.assertFalse(bots[PACKAGE_B]._brain_runtime.stopping)
         self.assertFalse(tasks[PACKAGE_B].done())
 
         runtimes[PACKAGE_B].finished.set()
         await self.settle(tasks[PACKAGE_B])
-        self.assertIsNone(mains[PACKAGE_B]._brain_task)
-        runtimes[PACKAGE_B].app._release_bot_lock.assert_called_once_with()
-        runtimes[PACKAGE_A].app._release_bot_lock.assert_called_once_with()
+        self.assertIsNone(bots[PACKAGE_B]._brain_runtime.task)
+        self.assertFalse(bots[PACKAGE_B]._brain_runtime.stopping)
+        runtimes[PACKAGE_B].app._release_bot_lock.assert_not_called()
+        runtimes[PACKAGE_A].app._release_bot_lock.assert_not_called()
         self.environment.assert_isolated(self)
 
-    async def test_stale_done_callback_does_not_release_replacement_task_lock(self):
-        main = self.environment.load_main(PACKAGE_A)
-        runtime = self.environment.install_runtime(PACKAGE_A)
-        old_task = await self.start(main)
-        runtime.finished.set()
-        await self.settle(old_task)
-        runtime.app._release_bot_lock.assert_called_once_with()
-        runtime.finished.clear()
-        replacement = await self.start(main)
-        main._on_brain_done(old_task)
-        self.assertIs(main._brain_task, replacement)
-        self.assertFalse(replacement.done())
-        runtime.app._release_bot_lock.assert_called_once_with()
-        self.environment.assert_isolated(self)
+    async def test_stale_done_callback_preserves_both_owners_without_releasing_cli_locks(self):
+        mains = {package: self.environment.load_main(package) for package in PACKAGES}
+        runtimes = {package: self.environment.install_runtime(package) for package in PACKAGES}
+        bots = {package: self.environment.construct_bot(mains[package]) for package in PACKAGES}
+        tasks = {package: await self.start(bots[package]) for package in PACKAGES}
+        for package, other in ((PACKAGE_A, PACKAGE_B), (PACKAGE_B, PACKAGE_A)):
+            with self.subTest(package=package):
+                old_task = tasks[package]
+                runtimes[package].finished.set()
+                await self.settle(old_task)
+                owner = bots[package]._brain_runtime
+                self.assertIsNone(owner.task)
+                runtimes[package].finished.clear()
+                tasks[package] = replacement = await self.start(bots[package])
+                owner._on_done(old_task)
+                self.assertIs(owner.task, replacement)
+                self.assertFalse(owner.stopping)
+                self.assertFalse(replacement.done())
+                self.assertIs(bots[other]._brain_runtime.task, tasks[other])
+                self.assertFalse(bots[other]._brain_runtime.stopping)
+                self.assertFalse(tasks[other].done())
+                for runtime in runtimes.values():
+                    runtime.app._release_bot_lock.assert_not_called()
+                self.environment.assert_isolated(self)
 
 
 class PackageConfigBridgeTests(_PackageTestMixin, unittest.TestCase):

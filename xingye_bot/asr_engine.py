@@ -19,6 +19,7 @@ from dataclasses import dataclass, field
 
 from .. import _runtime
 from ..core.user_data import resolve_output_path
+from ..utils.async_tasks import drain_shielded
 from ..utils.display import log, log_exception
 
 
@@ -923,12 +924,20 @@ class ASREngine:
         """完整 ASR 流程：提取音频 → 识别 → 说话人分离（含耗时统计）"""
         import time as _time
         _pipeline_start = _time.time()
-        loop = asyncio.get_event_loop()
+        loop = asyncio.get_running_loop()
 
         # 1. 提取音频
-        audio_extract_sec = 0.0
+        extraction = loop.run_in_executor(None, self.extract_audio, video_path, None)
         try:
-            audio_path, audio_extract_sec = await loop.run_in_executor(None, self.extract_audio, video_path, None)
+            audio_path, audio_extract_sec = await drain_shielded(extraction)
+        except asyncio.CancelledError:
+            # A running executor job cannot be cancelled. Its output can have
+            # been created while the caller was waiting to propagate cancellation.
+            if not extraction.cancelled() and extraction.exception() is None:
+                audio_path, _ = extraction.result()
+                if audio_path:
+                    self._cleanup_audio(audio_path)
+            raise
         except Exception as e:
             result = ASRResult(success=False, error=f"音频提取失败: {e}")
             result.timing["audio_extract_seconds"] = _time.time() - _pipeline_start
@@ -941,33 +950,28 @@ class ASREngine:
             result.timing["total_pipeline_seconds"] = _time.time() - _pipeline_start
             return result
 
-        # 2. 选择引擎执行识别
-        if self.backend == "funasr" and self._check_funasr_available():
-            result = await loop.run_in_executor(None, self.transcribe_funasr, audio_path)
-        else:
-            if self.backend == "funasr":
-                log("FunASR 不可用，回退到 Whisper", "WARN")
-            result = await loop.run_in_executor(None, self.transcribe_whisper, audio_path)
+        try:
+            if self.backend == "funasr" and self._check_funasr_available():
+                transcribe = self.transcribe_funasr
+            else:
+                if self.backend == "funasr":
+                    log("FunASR 不可用，回退到 Whisper", "WARN")
+                transcribe = self.transcribe_whisper
+            result = await drain_shielded(loop.run_in_executor(None, transcribe, audio_path))
 
-        # 3. 说话人分离（仅 Whisper 需要额外处理）
-        if not result.success:
+            if (result.success and self.speaker_separation
+                    and result.backend == "whisper" and result.segments):
+                result.segments = await drain_shielded(loop.run_in_executor(
+                    None, self.separate_speakers, audio_path, result.segments
+                ))
+                result.text = self.format_result(result)
+        finally:
             self._cleanup_audio(audio_path)
-            result.timing["audio_extract_seconds"] = audio_extract_sec
-            result.timing["total_pipeline_seconds"] = _time.time() - _pipeline_start
-            return result
-
-        if self.speaker_separation and result.backend == "whisper" and result.segments:
-            result.segments = await loop.run_in_executor(
-                None, self.separate_speakers, audio_path, result.segments
-            )
-            result.text = self.format_result(result)
-
-        # 4. 清理音频
-        self._cleanup_audio(audio_path)
 
         # ── 汇总耗时 ──
-        result.timing["audio_extract_seconds"] = round(audio_extract_sec, 2)
-        result.timing["total_pipeline_seconds"] = round(_time.time() - _pipeline_start, 2)
+        total_sec = _time.time() - _pipeline_start
+        result.timing["audio_extract_seconds"] = round(audio_extract_sec, 2) if result.success else audio_extract_sec
+        result.timing["total_pipeline_seconds"] = round(total_sec, 2) if result.success else total_sec
         return result
 
     def _cleanup_audio(self, audio_path: Path):

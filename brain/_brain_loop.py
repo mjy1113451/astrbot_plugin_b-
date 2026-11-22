@@ -127,13 +127,87 @@ from ..core.platform_actions import public_commenting_enabled, video_liking_enab
 class BrainLoopMixin:
     """主循环方法"""
 
+    _detached_cleanups = set()
+
     async def run(self):
-        # 🔒 单实例锁：防止多个 bot 进程同时运行
-        if not _acquire_bot_lock():
-            log("[LOCK] ❌ 已有 bot 实例正在运行，退出", "ERROR")
-            return
-        log("[LOCK] ✅ 单实例锁已获取", "INFO")
-        
+        """Run once; on repeated cancellation only the wait ends, not cleanup."""
+        if getattr(self, "_run_started", False):
+            raise RuntimeError("Brain 实例只能运行一次，请创建新实例")
+        self._run_started = True
+        self._background_tasks = set()
+        self._closing = False
+        self._cleanup_task = None
+        release_lock = None
+        try:
+            # Capture this acquisition's release function, not a reloaded module's.
+            if not _acquire_bot_lock():
+                log("[LOCK] ❌ 已有 bot 实例正在运行，退出", "ERROR")
+                return
+            release_lock = _release_bot_lock
+            log("[LOCK] ✅ 单实例锁已获取", "INFO")
+            return await self._run_session()
+        finally:
+            self._closing = True
+            self._cleanup_task = asyncio.create_task(
+                self._cleanup_run(release_lock), name="brain_cleanup"
+            )
+            try:
+                await asyncio.shield(self._cleanup_task)
+            except asyncio.CancelledError:
+                if not self._cleanup_task.cancelled():
+                    try:
+                        # The first cancellation can arrive during a natural exit.
+                        if asyncio.current_task().cancelling() <= 1:
+                            await asyncio.shield(self._cleanup_task)
+                    finally:
+                        if not self._cleanup_task.done():
+                            # Keep ownership even if the caller discards this Brain.
+                            self._detached_cleanups.add(self._cleanup_task)
+                            self._cleanup_task.add_done_callback(self._detached_cleanups.discard)
+                            self._cleanup_task.add_done_callback(_safe_task_callback("brain_cleanup"))
+                            log("再次取消：停止等待，机器人仍在后台清理并保留实例锁", "WARN")
+                        elif not self._cleanup_task.cancelled():
+                            self._cleanup_task.exception()
+                raise
+
+    def _spawn_background_task(self, coroutine, task_name):
+        """Register a detached session child immediately, before it can run."""
+        if not getattr(self, "_run_started", False) or self._closing:
+            coroutine.close()
+            raise RuntimeError("Brain 会话尚未启动或正在关闭，不能创建后台任务")
+        try:
+            task = asyncio.create_task(coroutine, name=task_name)
+        except BaseException:
+            coroutine.close()
+            raise
+        self._background_tasks.add(task)
+        task.add_done_callback(self._background_tasks.discard)
+        task.add_done_callback(_safe_task_callback(task_name))
+        return task
+
+    async def _cleanup_run(self, release_lock):
+        """Drain only this instance's children, then its client, then its lock."""
+        try:
+            children = tuple(self._background_tasks)
+            for task in children:
+                if not task.done():
+                    task.cancel()
+            if children:
+                await asyncio.gather(*children, return_exceptions=True)
+        finally:
+            self._background_tasks.clear()
+            try:
+                await self.bili.close()
+            except Exception as exc:
+                log_exception("关闭机器人 B 站客户端失败", exc)
+            finally:
+                if release_lock is not None:
+                    try:
+                        release_lock()
+                    except Exception as exc:
+                        log_exception("释放机器人实例锁失败", exc)
+
+    async def _run_session(self):
         log("bilibili_learning_bot - 启动...", "SUCCESS")
         self.update_runtime_clock(starting=True)
         if self.previous_seen_at:
@@ -329,8 +403,7 @@ class BrainLoopMixin:
                                     log(f"🤖 Agent深度搜索完成: {ok_steps}/{len(run.get('results', []))}步骤, 看了{watched_count}个视频", "SUCCESS")
                                 except Exception as e:
                                     log_exception("Agent深度搜索异常", e)
-                            task = asyncio.create_task(_dive_async())
-                            task.add_done_callback(_safe_task_callback("agent_dive_async"))
+                            self._spawn_background_task(_dive_async(), "agent_dive_async")
 
                 # ── 📂 [KB] 自动重分类"未分类"文件夹 ──
                 if AUTO_RECLASSIFY_ENABLED and _loop_count > 5:
@@ -409,8 +482,7 @@ class BrainLoopMixin:
                     log(f"📖 复习目标:《{title}》- @{up}", "REVISIT")
                     # 🔍 知识验证：回顾时联网核实知识的真实性和时效性（带异常回调）
                     if not _smart_token:
-                        task = asyncio.create_task(self.verify_knowledge_file(bvid, title))
-                        task.add_done_callback(_safe_task_callback("verify_knowledge_file"))
+                        self._spawn_background_task(self.verify_knowledge_file(bvid, title), "verify_knowledge_file")
                     # 顺便浏览该UP的视频（副作用：记录到浏览历史）
                     await self.maybe_browse_up_videos(force_up_uid=up_uid if up_uid else None, up_name_hint=up)
                 else:
@@ -534,8 +606,7 @@ class BrainLoopMixin:
                             log(f"锁定目标:《{title}》- @{up}", "SCAN")
 
                 # [SPEED] 锁定后立即后台预取推荐流 + 短暂休息并行
-                prefetch_task = asyncio.create_task(self._prefetch_recommendations())
-                prefetch_task.add_done_callback(_safe_task_callback("prefetch_recs"))
+                self._spawn_background_task(self._prefetch_recommendations(), "prefetch_recs")
                 self.update_activity("准备分析视频", "已锁定目标，正在安排字幕、评论与弹幕读取", phase="prepare")
                 await asyncio.sleep(random.uniform(0.3, 0.8))
 
@@ -850,8 +921,7 @@ class BrainLoopMixin:
                             log(f"[STATS] 内容多样性提醒: {metrics.get('cocoon_risk')} | 多样性={metrics.get('diversity_score')} | 稀少领域={metrics.get('underrepresented_areas', [])}", "WARN")
                     # 触发深度AI分析
                     if self._psycho_profile_analysis_count % PSYCHO_DEEP_ANALYZE_INTERVAL == 0 and not _smart_token:
-                        task = asyncio.create_task(self.psycho_profile.deep_analyze())
-                        task.add_done_callback(_safe_task_callback("deep_analyze"))
+                        self._spawn_background_task(self.psycho_profile.deep_analyze(), "deep_analyze")
                         self.psycho_profile.detect_interest_shifts()
 
                 self.energy -= 1
@@ -1091,8 +1161,7 @@ class BrainLoopMixin:
                     # 异步非阻塞：后台Agent继续探索
                     self.last_agent_run_at = datetime.now()
                     goal1 = f"继续了解这个主题：{learning_topic}。搜索相关视频，先看1-3个，如果内容有价值再继续多看。"
-                    task = asyncio.create_task(self._agent_goal_async(goal1, score=score))
-                    task.add_done_callback(_safe_task_callback("agent_goal1"))
+                    self._spawn_background_task(self._agent_goal_async(goal1, score=score), "agent_goal1")
 
                 # 🧭 好奇心驱动深度搜索：遇到感兴趣/不了解的内容，B站搜索深入学（动态2-10个视频）
                 if CURIOSITY_DEEP_DIVE_ENABLED and not _smart_token and score >= CURIOSITY_DEEP_DIVE_MIN_SCORE:
@@ -1119,8 +1188,7 @@ class BrainLoopMixin:
                     # [FIX] 异步非阻塞：后台探索，不卡主循环
                     self.last_agent_run_at = datetime.now()
                     goal2 = f"深入了解这个主题：{title}。搜索相关视频，先看1-3个，有价值再继续。"
-                    task = asyncio.create_task(self._agent_goal_async(goal2, score=score))
-                    task.add_done_callback(_safe_task_callback("agent_goal2"))
+                    self._spawn_background_task(self._agent_goal_async(goal2, score=score), "agent_goal2")
 
                 if decision.get('remember_up') and up not in self.memory['known_ups']:
                     self.remember_up(up, uid=up_uid)
