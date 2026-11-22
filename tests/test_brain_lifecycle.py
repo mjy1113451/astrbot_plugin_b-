@@ -268,7 +268,7 @@ class BrainLifecycleTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(self.namespace["order"], ["acquire", "child-done", "close", "release"])
         self.assert_finished()
 
-    async def exercise_resistant_child(self, natural_return, extra_cancels):
+    async def exercise_resistant_child(self, natural_return, extra_cancels, *, detaches=False):
         entered, cancelling, finish, session_hold = (self.event() for _ in range(4))
         children = []
 
@@ -295,16 +295,28 @@ class BrainLifecycleTests(unittest.IsolatedAsyncioTestCase):
         if not natural_return:
             parent.cancel()
         await self.reached(cancelling)
-        for _ in range(extra_cancels):
+        for index in range(extra_cancels):
             parent.cancel()
             await asyncio.sleep(0)
-        self.assertFalse(parent.done())
+            if index + 1 < extra_cancels:
+                self.assertFalse(parent.done())
+        if detaches:
+            done, _ = await asyncio.wait((parent,), timeout=2)
+            self.assertIn(parent, done, "second cancel must end the wait with cleanup blocked")
+            self.assertTrue(parent.cancelled())
+            self.assertIn(self.brain._cleanup_task, self.brain._detached_cleanups)
+            self.log.assert_any_call("再次取消：停止等待，机器人仍在后台清理并保留实例锁", "WARN")
+        else:
+            self.assertFalse(parent.done())
         self.assertFalse(children[0].done())
         self.assertEqual(children[0].cancelling(), 1)
         self.assertTrue(self.namespace["lock"].held)
         self.brain.bili.close.assert_not_awaited()
         self.namespace["_release_bot_lock"].assert_not_called()
         finish.set()
+        if detaches:
+            await asyncio.wait_for(asyncio.shield(self.brain._cleanup_task), 2)
+            self.assertNotIn(self.brain._cleanup_task, self.brain._detached_cleanups)
         if not natural_return or extra_cancels:
             with self.assertRaises(asyncio.CancelledError):
                 await parent
@@ -317,11 +329,14 @@ class BrainLifecycleTests(unittest.IsolatedAsyncioTestCase):
     async def test_cancel_keeps_lock_until_cancel_resistant_child_is_done(self):
         await self.exercise_resistant_child(natural_return=False, extra_cancels=0)
 
-    async def test_repeated_parent_cancel_cannot_cancel_cleanup_or_child_again(self):
-        await self.exercise_resistant_child(natural_return=False, extra_cancels=2)
+    async def test_second_cancel_ends_wait_even_while_cleanup_is_stuck(self):
+        await self.exercise_resistant_child(natural_return=False, extra_cancels=1, detaches=True)
 
     async def test_cancel_during_natural_cleanup_is_deferred_and_propagated(self):
-        await self.exercise_resistant_child(natural_return=True, extra_cancels=2)
+        await self.exercise_resistant_child(natural_return=True, extra_cancels=1)
+
+    async def test_second_cancel_during_natural_cleanup_also_ends_wait(self):
+        await self.exercise_resistant_child(natural_return=True, extra_cancels=2, detaches=True)
 
     async def test_cancel_during_client_close_waits_before_releasing(self):
         entered, finish = self.event(), self.event()
@@ -334,9 +349,8 @@ class BrainLifecycleTests(unittest.IsolatedAsyncioTestCase):
         self.brain.bili.close.side_effect = close
         parent = self.task(self.brain.run())
         await self.reached(entered)
-        for _ in range(2):
-            parent.cancel()
-            await asyncio.sleep(0)
+        parent.cancel()
+        await asyncio.sleep(0)
         self.assertFalse(parent.done())
         self.assertTrue(self.namespace["lock"].held)
         self.namespace["_release_bot_lock"].assert_not_called()

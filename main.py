@@ -182,6 +182,11 @@ class _BrainRuntime:
     def _on_done(self, task):
         if self.task is not task:
             return
+        cleanup = getattr(self.brain, "_cleanup_task", None)
+        if cleanup is not None and cleanup is not task and not cleanup.done():
+            self.task = cleanup
+            cleanup.add_done_callback(self._on_done)
+            return
         self.task = None
         self.brain = None
         self.stopping = False
@@ -209,15 +214,13 @@ class _BrainRuntime:
     def is_stopping(self):
         return self.stopping or getattr(self.brain, "_closing", False) is True
 
-    async def request_stop(self, *, unloading=False):
+    async def request_stop(self):
         async with self.lock:
-            if unloading:
-                self.closed = True
             task = self.task
-            if task is None:
-                return None, False
-            if task.done():
+            if task is not None and task.done():
                 self._on_done(task)
+                task = self.task
+            if task is None:
                 return None, False
             if self.is_stopping():
                 return task, False
@@ -228,29 +231,34 @@ class _BrainRuntime:
 
     async def wait(self, task, *, timeout=None):
         # wait_for would cancel the target again on timeout or caller cancellation.
-        await asyncio.wait((task,), timeout=timeout)
-        if task.done():
+        brain = self.brain if self.task is task else None
+        loop = asyncio.get_running_loop()
+        deadline = None if timeout is None else loop.time() + timeout
+        while True:
+            remaining = None if deadline is None else max(0, deadline - loop.time())
+            done, _ = await asyncio.wait((task,), timeout=remaining)
+            if not done:
+                return False
             self._on_done(task)
-            return True
-        return False
+            cleanup = getattr(brain, "_cleanup_task", None)
+            if cleanup is None or cleanup is task or cleanup.done():
+                return True
+            task = cleanup
 
     async def terminate(self):
-        cancelled = False
-        while True:
-            try:
-                task, _ = await self.request_stop(unloading=True)
-                break
-            except asyncio.CancelledError:
-                cancelled = True
-        if task is not None:
-            while not task.done():
-                try:
-                    await self.wait(task)
-                except asyncio.CancelledError:
-                    cancelled = True
-            self._on_done(task)
-        if cancelled:
-            raise asyncio.CancelledError
+        self.closed = True
+
+        async def drain():
+            task, _ = await self.request_stop()
+            if task is not None:
+                await self.wait(task)
+
+        try:
+            await drain()
+        except asyncio.CancelledError:
+            # A second cancellation ends the caller's wait, not the owned work.
+            await drain()
+            raise
 
 
 class BilibiliLearningBot(Star):

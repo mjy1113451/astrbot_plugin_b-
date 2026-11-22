@@ -127,8 +127,10 @@ from ..core.platform_actions import public_commenting_enabled, video_liking_enab
 class BrainLoopMixin:
     """主循环方法"""
 
+    _detached_cleanups = set()
+
     async def run(self):
-        """Run once per instance; completion includes all owned resource cleanup."""
+        """Run once; on repeated cancellation only the wait ends, not cleanup."""
         if getattr(self, "_run_started", False):
             raise RuntimeError("Brain 实例只能运行一次，请创建新实例")
         self._run_started = True
@@ -149,17 +151,24 @@ class BrainLoopMixin:
             self._cleanup_task = asyncio.create_task(
                 self._cleanup_run(release_lock), name="brain_cleanup"
             )
-            cancelled = None
-            while not self._cleanup_task.done():
-                try:
-                    await asyncio.shield(self._cleanup_task)
-                except asyncio.CancelledError as exc:
-                    # Defer further caller cancellation without cancelling children
-                    # again or releasing resources while they are still in use.
-                    cancelled = exc
-            self._cleanup_task.result()
-            if cancelled is not None:
-                raise cancelled
+            try:
+                await asyncio.shield(self._cleanup_task)
+            except asyncio.CancelledError:
+                if not self._cleanup_task.cancelled():
+                    try:
+                        # The first cancellation can arrive during a natural exit.
+                        if asyncio.current_task().cancelling() <= 1:
+                            await asyncio.shield(self._cleanup_task)
+                    finally:
+                        if not self._cleanup_task.done():
+                            # Keep ownership even if the caller discards this Brain.
+                            self._detached_cleanups.add(self._cleanup_task)
+                            self._cleanup_task.add_done_callback(self._detached_cleanups.discard)
+                            self._cleanup_task.add_done_callback(_safe_task_callback("brain_cleanup"))
+                            log("再次取消：停止等待，机器人仍在后台清理并保留实例锁", "WARN")
+                        elif not self._cleanup_task.cancelled():
+                            self._cleanup_task.exception()
+                raise
 
     def _spawn_background_task(self, coroutine, task_name):
         """Register a detached session child immediately, before it can run."""

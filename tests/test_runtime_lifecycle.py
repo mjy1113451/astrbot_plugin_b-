@@ -181,6 +181,42 @@ class RuntimeLifecycleTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(cancellations, [])
         self.assertIn("停止中", (await self.status())[0])
 
+    async def test_stop_tracks_cleanup_after_cancelled_run_ends(self):
+        parent_entered, cleanup_entered = asyncio.Event(), asyncio.Event()
+        brain = SimpleNamespace(_cleanup_task=None, _closing=False)
+
+        async def cleanup():
+            cleanup_entered.set()
+            await self.release_cleanup.wait()
+
+        async def run():
+            parent_entered.set()
+            try:
+                await asyncio.Event().wait()
+            finally:
+                brain._closing = True
+                brain._cleanup_task = asyncio.create_task(cleanup())
+                self.tasks.append(brain._cleanup_task)
+                await asyncio.shield(brain._cleanup_task)
+
+        brain.run = run
+        self.runtime.brain.AgentBrain.return_value = brain
+        task = await self.start()
+        await parent_entered.wait()
+        self.bot._brain_runtime.stop_timeout = 0.01
+        command = asyncio.create_task(self.stop())
+        self.tasks.append(command)
+        await cleanup_entered.wait()
+        task.cancel()
+        with self.assertRaises(asyncio.CancelledError):
+            await task
+        self.assertIn("仍在收尾", (await command)[0])
+        self.assertIn("停止中", (await self.status())[0])
+        self.assertIn("停止中", [reply async for reply in self.bot.start_bot(self.event)][0])
+        self.release_cleanup.set()
+        await brain._cleanup_task
+        self.assertEqual(await self.bot._brain_runtime.state(), "idle")
+
     async def test_terminate_waits_for_cleanup_and_closes_instance_to_new_starts(self):
         _, cleanup_started, cancellations = self.blocking_cleanup()
         task = await self.start()
@@ -223,6 +259,22 @@ class RuntimeLifecycleTests(unittest.IsolatedAsyncioTestCase):
         with self.assertRaises(asyncio.CancelledError):
             await unload
         self.assertTrue(task.done())
+        self.assertEqual(cancellations, [])
+
+    async def test_second_unload_cancel_ends_wait_without_recancelling_cleanup(self):
+        _, cleanup_started, cancellations = self.blocking_cleanup()
+        task = await self.start()
+        unload = asyncio.create_task(self.bot.terminate())
+        self.tasks.append(unload)
+        await asyncio.wait_for(cleanup_started.wait(), timeout=2)
+        unload.cancel()
+        await asyncio.sleep(0)
+        self.assertFalse(unload.done())
+        unload.cancel()
+        done, _ = await asyncio.wait((unload,), timeout=2)
+        self.assertIn(unload, done)
+        self.assertTrue(unload.cancelled())
+        self.assertFalse(task.done())
         self.assertEqual(cancellations, [])
 
     async def test_in_place_reload_does_not_lose_old_instance_task(self):

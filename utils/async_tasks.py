@@ -2,8 +2,28 @@
 import asyncio
 
 
-async def wait_for_owned(coroutine, timeout):
-    """Wait with a deadline, but always drain the owned coroutine before exiting."""
+async def drain_shielded(future):
+    """Drain a resource-owning future before propagating caller cancellation."""
+    cancelled = None
+    try:
+        while not future.done():
+            try:
+                await asyncio.shield(future)
+            except asyncio.CancelledError as exc:
+                cancelled = exc
+        return future.result()
+    finally:
+        if cancelled is not None:
+            raise cancelled
+
+
+async def wait_for_owned_coroutine(coroutine, timeout):
+    """Apply a deadline and drain the one task created for ``coroutine``.
+
+    The deadline triggers cancellation, not a deadline for cleanup. The
+    coroutine must await and drain any tasks it starts; detached tasks and
+    other descendants are not discovered, cancelled or joined here.
+    """
     try:
         task = asyncio.create_task(coroutine)
     except BaseException:

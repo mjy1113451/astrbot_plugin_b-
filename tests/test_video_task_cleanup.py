@@ -3,10 +3,14 @@ import ast
 import asyncio
 from pathlib import Path
 import sys
+import tempfile
+import threading
 from types import ModuleType, SimpleNamespace
 import unittest
 from unittest.mock import AsyncMock, Mock, patch
 
+from test_owned_async_tasks import drain_shielded
+from test_brain_lifecycle import load_node
 
 ROOT = Path(__file__).resolve().parents[1]
 SOURCE = ROOT / "brain" / "_brain_video.py"
@@ -58,21 +62,23 @@ class FakeWorker:
             self.finished.set()
 
 
-class FakeMedia:
-    name = "shared.mp4"
-
-    def __init__(self, workers, history):
+class TrackedMedia:
+    def __init__(self, path, workers, history):
+        self.path = path
+        self.name = path.name
+        self.path.touch()
         self.workers = workers
         self.history = history
         self.deleted = False
         self.finished_when_deleted = None
 
     def exists(self):
-        return not self.deleted
+        return self.path.exists()
 
     def unlink(self):
         self.finished_when_deleted = tuple(worker.finished.is_set() for worker in self.workers)
         self.history.append("media_deleted")
+        self.path.unlink()
         self.deleted = True
 
 
@@ -86,7 +92,9 @@ class VideoTaskCleanupTests(unittest.IsolatedAsyncioTestCase):
         )
         self.asr = FakeWorker("asr", self.asr_result, self.history)
         self.vision = FakeWorker("vision", "vision result", self.history)
-        self.media = FakeMedia((self.asr, self.vision), self.history)
+        directory = tempfile.TemporaryDirectory()
+        self.addCleanup(directory.cleanup)
+        self.media = TrackedMedia(Path(directory.name) / "shared.mp4", (self.asr, self.vision), self.history)
         self.engine = SimpleNamespace(
             is_available=Mock(return_value=True), has_ffmpeg=Mock(return_value=True),
             process_video=self.asr.run, format_result=Mock(return_value="asr result"),
@@ -114,6 +122,7 @@ class VideoTaskCleanupTests(unittest.IsolatedAsyncioTestCase):
             "config": {"asr": {}, "vision": {"frames_enabled": True}},
             "ASR_ENABLED": True, "SUBTITLE_STRICT_CHECK": False,
             "_Path": self.path_factory, "log": Mock(), "log_exception": self.log_exception,
+            "drain_shielded": drain_shielded,
         })
         self.brain = SimpleNamespace(
             _download_video_for_asr=AsyncMock(return_value=(self.media.name, 0.1, 1.0)),
@@ -153,12 +162,13 @@ class VideoTaskCleanupTests(unittest.IsolatedAsyncioTestCase):
 
     def assert_workers_finished_before_delete(self):
         self.assertTrue(self.media.deleted)
+        self.assertFalse(self.media.path.exists())
         self.assertEqual(self.media.finished_when_deleted, (True, True))
         self.assertEqual(self.history[-1], "media_deleted")
         self.assertTrue(self.asr.task.done())
         self.assertTrue(self.vision.task.done())
 
-    async def assert_cancellation_drains_workers(self, cancel_child=False):
+    async def assert_cancellation_drains_workers(self, cancel_child=False, repeat=False):
         self.vision.cleanup_release.clear()
         await self.start_parallel()
         if cancel_child:
@@ -172,6 +182,12 @@ class VideoTaskCleanupTests(unittest.IsolatedAsyncioTestCase):
         self.assertFalse(self.vision.finished.is_set())
         self.assertFalse(self.parent.done())
         self.assertFalse(self.media.deleted)
+        if repeat:
+            self.parent.cancel()
+            await asyncio.sleep(0)
+            self.assertFalse(self.parent.done())
+            self.assertEqual(self.vision.task.cancelling(), 1)
+            self.assertTrue(self.media.path.exists())
         self.vision.cleanup_release.set()
         with self.assertRaises(asyncio.CancelledError):
             await asyncio.wait_for(self.parent, timeout=2)
@@ -182,7 +198,70 @@ class VideoTaskCleanupTests(unittest.IsolatedAsyncioTestCase):
         self.log_exception.assert_not_called()
 
     async def test_parent_cancel_while_awaiting_asr_drains_vision_before_media_cleanup(self):
-        await self.assert_cancellation_drains_workers()
+        await self.assert_cancellation_drains_workers(repeat=True)
+
+    async def test_repeated_parent_cancel_while_awaiting_vision_preserves_media_cleanup(self):
+        asr_consumed = asyncio.Event()
+        self.engine.format_result.side_effect = lambda _: (asr_consumed.set() or "asr result")
+        self.vision.cleanup_release.clear()
+        await self.start_parallel()
+        self.asr.release.set()
+        await self.wait_event(asr_consumed)
+        self.parent.cancel()
+        await self.wait_event(self.vision.cleanup_started)
+        self.parent.cancel()
+        await asyncio.sleep(0)
+        self.assertFalse(self.parent.done())
+        self.assertEqual(self.vision.task.cancelling(), 1)
+        self.assertTrue(self.media.path.exists())
+        self.vision.cleanup_release.set()
+        with self.assertRaises(asyncio.CancelledError):
+            await asyncio.wait_for(self.parent, timeout=2)
+        self.assert_workers_finished_before_delete()
+
+    async def test_cancel_waits_for_asr_executor_before_deleting_video_and_audio(self):
+        extraction_started = asyncio.Event()
+        release_extraction = threading.Event()
+        loop = asyncio.get_running_loop()
+        audio_path = self.media.path.with_suffix(".wav")
+
+        def extract_audio(video_path, _):
+            loop.call_soon_threadsafe(extraction_started.set)
+            if not release_extraction.wait(timeout=5):
+                raise TimeoutError("test extraction not released")
+            self.assertTrue(video_path.exists())
+            audio_path.touch()
+            return audio_path, 0.1
+
+        process_video = load_node("xingye_bot/asr_engine.py", "process_video", {
+            "Path": Path, "ASRResult": SimpleNamespace, "asyncio": asyncio,
+            "drain_shielded": drain_shielded,
+        })
+        engine = SimpleNamespace(extract_audio=extract_audio, _cleanup_audio=lambda path: path.unlink())
+
+        async def run_asr(*args, **kwargs):
+            self.asr.task = asyncio.current_task()
+            try:
+                return await process_video(engine, *args, **kwargs)
+            finally:
+                self.asr.finished.set()
+
+        self.engine.process_video = run_asr
+        self.start_parent()
+        try:
+            await self.wait_event(extraction_started)
+            self.parent.cancel()
+            await self.wait_event(self.vision.finished)
+            self.parent.cancel()
+            await asyncio.sleep(0)
+            self.assertFalse(self.parent.done())
+            self.assertTrue(self.media.path.exists())
+        finally:
+            release_extraction.set()
+        with self.assertRaises(asyncio.CancelledError):
+            await asyncio.wait_for(self.parent, timeout=2)
+        self.assert_workers_finished_before_delete()
+        self.assertFalse(audio_path.exists())
 
     async def test_asr_child_cancel_drains_vision_without_parent_cancel_request(self):
         await self.assert_cancellation_drains_workers(cancel_child=True)

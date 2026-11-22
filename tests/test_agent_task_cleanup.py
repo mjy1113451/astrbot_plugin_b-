@@ -68,7 +68,7 @@ class AgentTaskCleanupTests(unittest.IsolatedAsyncioTestCase):
             }},
             "asyncio": SimpleNamespace(wait_for=short_legacy_wait,
                                        TimeoutError=asyncio.TimeoutError, sleep=asyncio.sleep),
-            "wait_for_owned": short_owned_wait,
+            "wait_for_owned_coroutine": short_owned_wait,
             "random": SimpleNamespace(uniform=lambda *args: 0), "log": Mock(),
             "json": json, "datetime": datetime,
             "AGENT_MAX_SEARCH_RESULTS": 1, "AGENT_MAX_VIDEOS_PER_PLAN": 1,
@@ -85,7 +85,7 @@ class AgentTaskCleanupTests(unittest.IsolatedAsyncioTestCase):
         })
         agent = lifecycle.load_node("brain/_brain_auto.py", "_agent_goal_async", {
             "asyncio": SimpleNamespace(wait_for=outer_legacy_wait, TimeoutError=asyncio.TimeoutError),
-            "wait_for_owned": outer_owned_wait,
+            "wait_for_owned_coroutine": outer_owned_wait,
             "AGENT_ENABLED": True, "config": {"agent": {"deep_learning_timeout_seconds": 30}},
             "log": Mock(), "log_exception": Mock(),
         })

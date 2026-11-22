@@ -18,6 +18,7 @@ from datetime import datetime
 from pathlib import Path as _Path
 
 from ._mixin_imports import *
+from ..utils.async_tasks import drain_shielded
 from ..utils.display import log_exception
 from ..core.user_data import TEMP_DIR, resolve_output_path
 from ..api.subtitles import _check_subtitle_mismatch
@@ -265,7 +266,7 @@ class BrainVideoMixin:
             asr_result = None
             if asr_task:
                 try:
-                    asr_result = await asr_task
+                    asr_result = await asyncio.shield(asr_task)
                     if asr_result.success:
                         asr_text = asr.format_result(asr_result)
                         speaker_count = len(set(s.speaker for s in asr_result.segments if s.speaker))
@@ -288,7 +289,7 @@ class BrainVideoMixin:
             
             if vision_task:
                 try:
-                    vision_result = await vision_task
+                    vision_result = await asyncio.shield(vision_task)
                     if vision_result:
                         log(f"[EYE] 视觉帧理解完成 ({len(vision_result)}字)", "SUCCESS")
                 except Exception as vis_e:
@@ -342,18 +343,19 @@ class BrainVideoMixin:
         finally:
             # 两个任务共享视频；取消/异常退出时先回收任务，再删除媒体。
             tasks = [task for task in (asr_task, vision_task) if task is not None]
-            for task in tasks:
-                if not task.done():
-                    task.cancel()
-            if tasks:
-                await asyncio.gather(*tasks, return_exceptions=True)
-            # 🧹 清理：删除视频文件
-            if video_path and video_path.exists():
-                try:
-                    video_path.unlink()
-                    log(f"🗑️ 已删除下载的视频文件: {video_path.name}", "DEBUG")
-                except Exception as del_e:
-                    log_exception("删除视频文件失败", del_e)
+            try:
+                for task in tasks:
+                    if not task.done() and not task.cancelling():
+                        task.cancel()
+                if tasks:
+                    await drain_shielded(asyncio.gather(*tasks, return_exceptions=True))
+            finally:
+                if video_path and video_path.exists():
+                    try:
+                        video_path.unlink()
+                        log(f"🗑️ 已删除下载的视频文件: {video_path.name}", "DEBUG")
+                    except OSError as del_e:
+                        log_exception("删除视频文件失败", del_e)
 
     async def _extract_and_analyze_frames(self, video_path, bvid, title=None, subtitle_text="", frame_count=None):
         """[VISION v2] 从已下载的视频文件抽帧→视觉AI分析→返回画面描述。

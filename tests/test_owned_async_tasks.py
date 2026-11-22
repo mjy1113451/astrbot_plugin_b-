@@ -9,7 +9,8 @@ ROOT = Path(__file__).resolve().parents[1]
 SPEC = importlib.util.spec_from_file_location("_owned_async_tasks", ROOT / "utils/async_tasks.py")
 MODULE = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(MODULE)
-wait_for_owned = MODULE.wait_for_owned
+wait_for_owned = MODULE.wait_for_owned_coroutine
+drain_shielded = MODULE.drain_shielded
 
 
 class OwnedAsyncTasksTests(unittest.IsolatedAsyncioTestCase):
