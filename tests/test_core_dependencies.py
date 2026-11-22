@@ -131,6 +131,9 @@ class CoreDependencyTests(unittest.TestCase):
         self.assertIsNone(runtime.data_root)
         bot = self.main.BilibiliLearningBot(None)
         self.assertIsNone(bot.config)
+        self.assertIsInstance(bot._brain_runtime, self.main._BrainRuntime)
+        self.assertIsNone(bot._brain_runtime.task)
+        self.assertFalse(bot._brain_runtime.stopping)
         get_data_dir.assert_called_once_with(runtime.PLUGIN_NAME)
         self.assertTrue(runtime.plugin_mode)
         self.assertEqual(runtime.data_root, get_data_dir.return_value.resolve())
@@ -234,14 +237,17 @@ class StartBotDependencyTests(unittest.IsolatedAsyncioTestCase):
         self.bot = self.main.BilibiliLearningBot(None)
         self.event = SimpleNamespace(plain_result=lambda text: text)
         self.cli = SimpleNamespace(_release_bot_lock=Mock())
+        self.cli_app = stack.enter_context(patch.object(self.main, "_cli_app", return_value=self.cli))
 
     async def asyncTearDown(self):
-        task = self.main._brain_task
+        task = self.bot._brain_runtime.task
         if task is not None:
-            task.cancel()
-            with patch.object(self.main, "_cli_app", return_value=self.cli):
-                await asyncio.gather(task, return_exceptions=True)
-                await asyncio.sleep(0)
+            if not task.done():
+                task.cancel()
+            await asyncio.gather(task, return_exceptions=True)
+            await asyncio.sleep(0)
+        self.cli_app.assert_not_called()
+        self.cli._release_bot_lock.assert_not_called()
 
     async def start(self):
         return [reply async for reply in self.bot.start_bot(self.event)]
@@ -317,7 +323,7 @@ class StartBotDependencyTests(unittest.IsolatedAsyncioTestCase):
         initialize.assert_called_once_with()
         factory.assert_called_once_with()
         self.assertEqual(calls.mock_calls, [call.initialize(), call.brain()])
-        self.assertIsNotNone(self.main._brain_task)
+        self.assertIsNotNone(self.bot._brain_runtime.task)
 
     async def test_initialization_failure_prevents_bridge_and_brain_creation(self):
         self.bot.config = {"use_astrbot_config": True}
@@ -335,7 +341,7 @@ class StartBotDependencyTests(unittest.IsolatedAsyncioTestCase):
         bridge.apply_astrbot_config.assert_not_called()
         factory.assert_not_called()
         self.cli._release_bot_lock.assert_not_called()
-        self.assertIsNone(self.main._brain_task)
+        self.assertIsNone(self.bot._brain_runtime.task)
 
     async def test_invalid_panel_configuration_prevents_brain_creation(self):
         self.bot.config = {"use_astrbot_config": True}
@@ -352,14 +358,14 @@ class StartBotDependencyTests(unittest.IsolatedAsyncioTestCase):
         with dependency_environment(missing={"socksio"}), self.brain_environment():
             replies = await self.start()
         self.assertIn("已在后台启动", replies[0])
-        self.assertIsNotNone(self.main._brain_task)
+        self.assertIsNotNone(self.bot._brain_runtime.task)
         self.logger.warning.assert_called_once()
 
     async def test_missing_required_dependency_blocks_start(self):
         with dependency_environment(missing={"pydantic"}), self.brain_environment() as factory:
             replies = await self.start()
         self.assertIn("pydantic", replies[0])
-        self.assertIsNone(self.main._brain_task)
+        self.assertIsNone(self.bot._brain_runtime.task)
         factory.assert_not_called()
 
     async def test_repaired_dependency_allows_retry_without_reload(self):
@@ -369,7 +375,7 @@ class StartBotDependencyTests(unittest.IsolatedAsyncioTestCase):
         with dependency_environment(), self.brain_environment():
             replies = await self.start()
         self.assertIn("已在后台启动", replies[0])
-        self.assertIsNotNone(self.main._brain_task)
+        self.assertIsNotNone(self.bot._brain_runtime.task)
 
 
 if __name__ == "__main__":

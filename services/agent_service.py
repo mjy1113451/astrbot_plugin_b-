@@ -2,6 +2,7 @@
 import asyncio, json, os, random, re, time
 from datetime import datetime
 from colorama import Fore, Style
+from ..utils.async_tasks import wait_for_owned
 from ..core.config import (
     config as _global_config, MODEL_BRAIN, AGENT_SKILL_LOG_FILE,
     AGENT_DIVE_MAX_VIDEOS, AGENT_MAX_SEARCH_RESULTS, AGENT_MAX_STEPS_PER_PLAN,
@@ -200,7 +201,7 @@ class AgentSkillRunner:
             title = item.get("title", "")
             try:
                 log(f"[AGENT] 开始深入学习 {bvid} | {title[:48]}", "LEARN")
-                ok, message = await asyncio.wait_for(
+                ok, message = await wait_for_owned(
                     analyze_bilibili_video_input(
                         bvid,
                         force_mode=None,

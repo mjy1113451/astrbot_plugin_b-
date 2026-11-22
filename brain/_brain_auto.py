@@ -1,6 +1,7 @@
 """brain/_brain_auto.py — AgentBrain 自动日记/进化/Agent任务 mixin"""
 from ._mixin_imports import *
 from ..utils.display import log_exception
+from ..utils.async_tasks import wait_for_owned
 
 class BrainAutoMixin:
     """自动日记、自我进化、Agent目标执行、深度搜索主题选择"""
@@ -105,7 +106,7 @@ class BrainAutoMixin:
             log(f"🤖 Agent后台探索: {goal[:60]}...", "CONFIG")
             agent_cfg = config.get("agent", {}) if isinstance(config, dict) else {}
             timeout_seconds = max(30, min(1800, int(agent_cfg.get("deep_learning_timeout_seconds", 180) or 180)))
-            run = await asyncio.wait_for(
+            run = await wait_for_owned(
                 self.agent_runner.run_goal(goal),
                 timeout=timeout_seconds
             )

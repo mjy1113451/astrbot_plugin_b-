@@ -26,16 +26,17 @@ class RuntimeEntryTests(unittest.IsolatedAsyncioTestCase):
         self.main = self.environment.load_main(PACKAGE_A)
 
     async def asyncTearDown(self):
-        tasks = {main._brain_task for main in self.environment.loaded_mains
-                 if main._brain_task is not None}
+        tasks = {bot._brain_runtime.task for bot in self.environment.bots
+                 if bot._brain_runtime.task is not None}
         for task in tasks:
-            task.cancel()
+            if not task.done():
+                task.cancel()
         if tasks:
             await asyncio.gather(*tasks, return_exceptions=True)
             await asyncio.sleep(0)
 
-    async def finish_brain(self, main, runtime):
-        task = main._brain_task
+    async def finish_brain(self, bot, runtime):
+        task = bot._brain_runtime.task
         if task is not None:
             runtime.finished.set()
             await asyncio.gather(task, return_exceptions=True)
@@ -87,7 +88,7 @@ class RuntimeEntryTests(unittest.IsolatedAsyncioTestCase):
                         )
                     else:
                         runtime.app.video_to_html_bg.assert_awaited_once_with(query=args[0])
-                    await self.finish_brain(main, runtime)
+                    await self.finish_brain(bot, runtime)
                     self.environment.assert_isolated(self)
 
     async def test_noninteractive_jobs_without_panel_initialize_without_loading_bridge(self):
@@ -123,7 +124,7 @@ class RuntimeEntryTests(unittest.IsolatedAsyncioTestCase):
                 runtime.video.analyze_bilibili_video_input.assert_not_awaited()
                 runtime.video.up_homepage_learn.assert_not_awaited()
                 runtime.app.video_to_html_bg.assert_not_awaited()
-                self.assertIsNone(self.main._brain_task)
+                self.assertIsNone(bot._brain_runtime.task)
                 self.environment.assert_isolated(self)
 
     async def test_plugin_never_enters_terminal_menus_even_when_host_has_tty(self):
@@ -170,7 +171,7 @@ class RuntimeEntryTests(unittest.IsolatedAsyncioTestCase):
         runtime.video.analyze_bilibili_video_input.assert_not_awaited()
         runtime.video.up_homepage_learn.assert_not_awaited()
         runtime.app.video_to_html_bg.assert_not_awaited()
-        self.assertIsNone(self.main._brain_task)
+        self.assertIsNone(bot._brain_runtime.task)
         self.environment.assert_isolated(self)
 
     def test_host_data_api_failure_does_not_fall_back_or_import_business(self):
@@ -190,12 +191,17 @@ class RuntimeEntryTests(unittest.IsolatedAsyncioTestCase):
     async def test_handler_failure_does_not_expose_original_exception(self):
         self.environment.construct_bot(self.main)
         runtime = self.environment.install_runtime(PACKAGE_A)
-        runtime.app._show_bg_tasks = Mock(side_effect=ValueError("PRIVATE_RESPONSE_CANARY"))
+        runtime.lock.bot_lock_status.side_effect = ValueError("PRIVATE_RESPONSE_CANARY")
         bot = self.environment.construct_bot(self.main)
         replies = [reply async for reply in bot.status(SimpleNamespace(plain_result=lambda text: text))]
-        self.assertIn("ValueError", replies[0])
+        self.assertEqual(len(replies), 1)
+        self.assertIn("当前实例未登记受管任务", replies[0])
+        self.assertIn("锁状态未知", replies[0])
         self.assertNotIn("PRIVATE_RESPONSE_CANARY", replies[0])
+        runtime.lock.bot_lock_status.assert_called_once_with(clean_stale=False)
         runtime.display.log_exception.assert_called_once()
+        runtime.app._release_bot_lock.assert_not_called()
+        self.environment.assert_isolated(self)
 
     def standalone(self):
         namespace = runpy.run_path(str(ROOT / "main.py"), run_name="standalone_fixture")

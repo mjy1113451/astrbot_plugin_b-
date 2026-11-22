@@ -210,6 +210,8 @@ class BrainVideoMixin:
         video_path = None
         vision_result = None
         asr_text = ""
+        asr_task = None
+        vision_task = None
         
         try:
             from ..xingye_bot.asr_engine import get_asr_engine, ASREngine
@@ -248,14 +250,12 @@ class BrainVideoMixin:
             _full_start = _full_time.time()
             
             # --- 并行：ASR语音识别 + 视觉帧抽取 ---
-            asr_task = None
             if do_asr and asr.is_available():
                 if not asr.has_ffmpeg():
                     log(f"[WARN] ffmpeg 未在PATH找到，将用 torchaudio 兜底提取音频", "DEBUG")
                 asr_task = asyncio.create_task(asr.process_video(video_path, title=title or ""))
             
             # 同时抽关键帧（复用已下载的视频，不再单独下载）
-            vision_task = None
             if do_vision and config.get('vision', {}).get('frames_enabled', True) and should_extract and not self._is_vision_globally_disabled():
                 vision_task = asyncio.create_task(self._extract_and_analyze_frames(
                     video_path, bvid, title, subtitle_text, frame_count=smart_frame_count
@@ -340,6 +340,13 @@ class BrainVideoMixin:
                 return True, vis_fallback
             return False, f"{content} | [理解流程异常]"
         finally:
+            # 两个任务共享视频；取消/异常退出时先回收任务，再删除媒体。
+            tasks = [task for task in (asr_task, vision_task) if task is not None]
+            for task in tasks:
+                if not task.done():
+                    task.cancel()
+            if tasks:
+                await asyncio.gather(*tasks, return_exceptions=True)
             # 🧹 清理：删除视频文件
             if video_path and video_path.exists():
                 try:
