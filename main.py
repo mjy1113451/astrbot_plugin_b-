@@ -167,7 +167,7 @@ def _log_exception(action: str, exc: BaseException) -> None:
 
 
 class _BrainRuntime:
-    """Own one plugin instance's task, including its asynchronous cleanup."""
+    """管理同一插件包内共享的任务及其异步收尾。"""
 
     def __init__(self):
         self.task: asyncio.Task | None = None
@@ -272,7 +272,11 @@ class BilibiliLearningBot(Star):
 
             _runtime.configure_plugin(StarTools.get_data_dir(_runtime.PLUGIN_NAME))
         self.config = config
-        self._brain_runtime = _BrainRuntime()
+        runtime = getattr(_runtime, "brain_runtime", None)
+        if runtime is None or runtime.closed:
+            runtime = _BrainRuntime()
+            _runtime.brain_runtime = runtime
+        self._brain_runtime = runtime
 
     async def terminate(self):
         """Wait for this instance's registered work before the host unloads it."""

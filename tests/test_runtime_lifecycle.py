@@ -94,6 +94,8 @@ class RuntimeLifecycleTests(unittest.IsolatedAsyncioTestCase):
                 finally:
                     await command.aclose()
                     self.runtime.config.initialize_config.side_effect = None
+                    bot._brain_runtime.stopping = False
+                    await bot.terminate()
 
     async def test_stop_immediately_after_start_still_enters_brain_finally(self):
         entered, _, _ = self.blocking_cleanup()
@@ -230,7 +232,11 @@ class RuntimeLifecycleTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(cancellations, [])
         self.assertIsNone(self.bot._brain_runtime.task)
         self.assertIn("卸载", [reply async for reply in self.bot.start_bot(self.event)][0])
+        replacement = self.environment.construct_bot(self.main)
+        self.assertIsNot(replacement._brain_runtime, self.bot._brain_runtime)
+        self.assertFalse(replacement._brain_runtime.closed)
         await self.bot.terminate()
+        await replacement.terminate()
 
     async def test_terminate_after_stop_timeout_does_not_cancel_again(self):
         _, cleanup_started, cancellations = self.blocking_cleanup()
@@ -318,14 +324,15 @@ class RuntimeLifecycleTests(unittest.IsolatedAsyncioTestCase):
         other_runtime.app._release_bot_lock.assert_not_called()
         self.environment.assert_isolated(self)
 
-    async def test_same_package_instances_do_not_share_task_handles(self):
+    async def test_same_package_recreated_instance_can_stop_existing_task(self):
         other_bot = self.environment.construct_bot(self.main)
         task = await self.start()
-        self.assertIsNot(other_bot._brain_runtime.lock, self.bot._brain_runtime.lock)
-        self.assertIsNone(other_bot._brain_runtime.task)
-        await other_bot.terminate()
-        self.assertFalse(task.done())
-        self.assertIs(self.bot._brain_runtime.task, task)
+        self.assertIs(other_bot._brain_runtime.lock, self.bot._brain_runtime.lock)
+        self.assertIs(other_bot._brain_runtime.task, task)
+        self.assertIn("运行中", (await self.status(other_bot))[0])
+        self.assertIn("已停止", (await self.stop(other_bot))[0])
+        self.assertTrue(task.done())
+        self.assertIsNone(self.bot._brain_runtime.task)
 
     async def test_stale_completion_callback_does_not_clear_replacement(self):
         old_task = await self.start()

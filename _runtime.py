@@ -5,6 +5,7 @@ from pathlib import Path
 PLUGIN_NAME = "astrbot_plugin_bilibili_learning_bot"
 plugin_mode = False
 data_root = None
+brain_runtime = None
 
 
 def configure_plugin(root):
