@@ -75,6 +75,28 @@ class RuntimeLifecycleTests(unittest.IsolatedAsyncioTestCase):
         self.assertIsNot(task, replacement)
         self.runtime.app._release_bot_lock.assert_not_called()
 
+    async def test_login_failure_is_reported_until_next_managed_start(self):
+        brain = SimpleNamespace()
+
+        async def login_failure():
+            brain._runtime_end_reason = "login_failed"
+
+        brain.run = login_failure
+        self.runtime.brain.AgentBrain.return_value = brain
+        task = await self.start()
+        await task
+        await asyncio.sleep(0)
+        for reply in ((await self.stop())[0], (await self.status())[0]):
+            self.assertIn("因登录失败已结束", reply)
+            self.assertIn("无需再次停止", reply)
+            self.assertNotIn("已停止", reply)
+        self.blocking_cleanup()
+        self.release_cleanup.set()
+        await self.start()
+        self.assertIsNone(self.bot._brain_runtime.last_end_reason)
+        await self.stop()
+        self.assertNotIn("登录失败", (await self.stop())[0])
+
     async def test_start_reply_never_keeps_state_lock_while_host_sends_message(self):
         for state in ("running", "stopping", "closed", "initialization_failure"):
             with self.subTest(state=state):

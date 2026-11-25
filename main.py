@@ -174,6 +174,7 @@ class _BrainRuntime:
         self.brain = None
         self.stopping = False
         self.closed = False
+        self.last_end_reason = None
         self.lock = asyncio.Lock()
         self.stop_timeout = 10.0
         self._log_error = _log_exception
@@ -187,6 +188,7 @@ class _BrainRuntime:
             self.task = cleanup
             cleanup.add_done_callback(self._on_done)
             return
+        self.last_end_reason = getattr(self.brain, "_runtime_end_reason", None)
         self.task = None
         self.brain = None
         self.stopping = False
@@ -198,6 +200,7 @@ class _BrainRuntime:
                 self._log_error("B站学习机器人后台任务异常退出", exc)
 
     def start(self, brain):
+        self.last_end_reason = None
         self.brain = brain
         self.task = asyncio.create_task(brain.run(), name="bili_learning_brain")
         self.stopping = False
@@ -282,8 +285,7 @@ class BilibiliLearningBot(Star):
         """Wait for this instance's registered work before the host unloads it."""
         await self._brain_runtime.terminate()
 
-    @staticmethod
-    def _unmanaged_state(scope="bili_stop"):
+    def _unmanaged_state(self, scope="bili_stop"):
         """Describe why this instance has no managed task, without implying a global stop.
 
         Args:
@@ -310,11 +312,15 @@ class BilibiliLearningBot(Star):
         except Exception as exc:
             _log_exception("读取机器人锁状态", exc)
             detail = "当前 profile 的锁状态未知，无法确认其他入口是否仍在运行。"
+        reason = ""
+        if getattr(self._brain_runtime, "last_end_reason", None) == "login_failed":
+            reason = "最近一次受管任务因登录失败已结束，无需再次停止；请检查凭据及插件日志，然后重新启动。"
         if scope == "bili_status":
-            return "ℹ️ 当前实例未登记受管任务，机器人主循环不由当前插件实例管理。" + detail
+            return "ℹ️ 当前实例未登记受管任务，机器人主循环不由当前插件实例管理。" + reason + detail
         return (
             "ℹ️ 当前实例未登记受管任务：本命令没有停止任何任务，"
-            "也不覆盖其他插件实例、CLI 入口或其他进程。"
+            + reason
+            + "也不覆盖其他插件实例、CLI 入口或其他进程。"
             + detail
             + "只有当前实例的受管任务完成清理时才会提示停止成功。"
         )
