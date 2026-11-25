@@ -246,6 +246,7 @@ class BrainLoopMixin:
 
         login_success = await self.initialize_login()
         if not login_success:
+            self._runtime_end_reason = "login_failed"
             log("登录失败，程序退出", "ERROR")
             return
 

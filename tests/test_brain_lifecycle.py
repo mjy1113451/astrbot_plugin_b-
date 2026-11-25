@@ -519,6 +519,13 @@ class BrainLifecycleTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(await host, "host-result")
         self.assert_finished(other_namespace, other)
 
+    async def test_login_failure_records_reason_and_cleans_up(self):
+        await self.brain.run()
+        self.assertEqual(self.brain._runtime_end_reason, "login_failed")
+        self.brain.initialize_login.assert_awaited_once()
+        self.brain._init_ob_bridge.assert_not_awaited()
+        self.assert_finished()
+
     async def test_repeated_or_concurrent_run_is_rejected_without_second_cleanup(self):
         entered, finish = self.event(), self.event()
 
