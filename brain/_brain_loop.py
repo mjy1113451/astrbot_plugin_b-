@@ -141,6 +141,7 @@ class BrainLoopMixin:
         try:
             # Capture this acquisition's release function, not a reloaded module's.
             if not _acquire_bot_lock():
+                self._runtime_end_reason = "lock_occupied"
                 log("[LOCK] ❌ 已有 bot 实例正在运行，退出", "ERROR")
                 return
             release_lock = _release_bot_lock
