@@ -117,6 +117,10 @@ class BrainInitMixin:
         self._ob_ab_tracker = None   # Phase 4: AB对比跟踪器
         self._ob_last_audit_report = 0  # 上次审计报告时间戳
 
+        # 初始化完成（登录 + OB 桥梁）后置位；插件据此区分“已确认启动”、
+        # “启动失败”和“初始化仍在进行”。
+        self.ready_event = asyncio.Event()
+
     async def _init_ob_bridge(self):
         """初始化 OpenBiliClaw 桥梁（在 run() 开始时调用）"""
         try:

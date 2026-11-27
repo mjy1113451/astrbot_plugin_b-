@@ -254,6 +254,10 @@ class BrainLoopMixin:
         # ── OpenBiliClaw 桥梁初始化 ──
         await self._init_ob_bridge()
 
+        # 初始化阶段结束，通知 /bili_start 可以确认启动成功。
+        ready_event = getattr(self, "ready_event", None)
+        if ready_event is not None:
+            ready_event.set()
         log(f"初始化完成 | 最大精力: {MAX_ENERGY}% | 视频间隔: {VIDEO_INTERVAL_MIN}-{VIDEO_INTERVAL_MAX}秒", "INFO")
         if SESSION_MAX_VIDEOS > 0:
             log(f"会话限制: 最多处理 {SESSION_MAX_VIDEOS} 个视频后自动停止", "SESSION")

@@ -111,6 +111,71 @@ class RuntimeLifecycleTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("单实例锁", replies[0])
         self.assertNotIn("已在后台启动", replies[0])
 
+    async def test_start_waits_for_ready_signal(self):
+        brain = SimpleNamespace(ready_event=asyncio.Event())
+
+        async def slow_ready():
+            await asyncio.sleep(0)
+            brain.ready_event.set()
+            await asyncio.Event().wait()
+
+        brain.run = slow_ready
+        self.runtime.brain.AgentBrain.return_value = brain
+        self.bot._brain_runtime.STARTUP_READY_TIMEOUT = 0.5
+        replies = [reply async for reply in self.bot.start_bot(self.event)]
+        self.assertIn("已在后台启动", replies[0])
+        self.assertNotIn("初始化尚未完成", replies[0])
+        self.assertIn("运行中", (await self.status())[0])
+        self.assertIn("已停止", (await self.stop())[0])
+
+    async def test_start_reports_failure_after_first_await(self):
+        brain = SimpleNamespace(ready_event=asyncio.Event())
+
+        async def login_failure():
+            await asyncio.sleep(0)
+            brain._runtime_end_reason = "login_failed"
+
+        brain.run = login_failure
+        self.runtime.brain.AgentBrain.return_value = brain
+        self.bot._brain_runtime.STARTUP_READY_TIMEOUT = 1.0
+        replies = [reply async for reply in self.bot.start_bot(self.event)]
+        self.assertIn("启动失败", replies[0])
+        self.assertIn("登录凭据", replies[0])
+        self.assertNotIn("已在后台启动", replies[0])
+
+    async def test_start_reports_crash_after_first_await(self):
+        brain = SimpleNamespace(ready_event=asyncio.Event())
+
+        async def crash():
+            await asyncio.sleep(0)
+            raise ValueError("PRIVATE_RUNTIME_CANARY")
+
+        brain.run = crash
+        self.runtime.brain.AgentBrain.return_value = brain
+        self.bot._brain_runtime.STARTUP_READY_TIMEOUT = 1.0
+        replies = [reply async for reply in self.bot.start_bot(self.event)]
+        self.assertIn("启动失败", replies[0])
+        self.assertNotIn("PRIVATE_RUNTIME_CANARY", replies[0])
+        self.assertNotIn("已在后台启动", replies[0])
+        await asyncio.sleep(0)
+        self.assertIsNone(self.bot._brain_runtime.task)
+        self.runtime.display.log_exception.assert_called_once()
+
+    async def test_start_reports_initializing_when_ready_times_out(self):
+        brain = SimpleNamespace(ready_event=asyncio.Event())
+
+        async def hang():
+            await asyncio.Event().wait()
+
+        brain.run = hang
+        self.runtime.brain.AgentBrain.return_value = brain
+        self.bot._brain_runtime.STARTUP_READY_TIMEOUT = 0.05
+        replies = [reply async for reply in self.bot.start_bot(self.event)]
+        self.assertIn("初始化尚未完成", replies[0])
+        self.assertIn("任务已登记", replies[0])
+        self.assertIn("运行中", (await self.status())[0])
+        self.assertIn("已停止", (await self.stop())[0])
+
     async def test_start_reply_never_keeps_state_lock_while_host_sends_message(self):
         for state in ("running", "stopping", "closed", "initialization_failure"):
             with self.subTest(state=state):
