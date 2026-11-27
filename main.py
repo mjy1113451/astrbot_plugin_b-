@@ -166,8 +166,41 @@ def _log_exception(action: str, exc: BaseException) -> None:
     log_exception(f"{action}失败", exc)
 
 
+# 后台任务的启动结果分三种：ready 事件置位（确认启动）、任务提前退出（明确失败）、
+# 超过该时长仍未置位（仍在初始化）。超时只影响命令回复，不会终止任务。
+_STARTUP_READY_TIMEOUT = 5.0
+
+# 后台任务在启动阶段退出时，按结束原因给出可执行的下一步；未知原因只说明任务
+# 已退出，避免把内部细节或异常正文发给用户（issue #55）。
+_STARTUP_FAILURE_REPLIES = {
+    "login_failed": (
+        "❌ 启动失败：未找到可用的 B站登录凭据（bilibili_cookies.json），后台任务已退出。"
+        "请先完成 B站登录，确认插件数据目录下存在该凭据文件，然后重新发送 /bili_start。"
+    ),
+    "lock_occupied": (
+        "❌ 启动失败：已有其他实例持有单实例锁，后台任务已退出。"
+        "请先停止该实例后再重新发送 /bili_start。"
+    ),
+    "crashed": "❌ 启动失败：后台任务在启动阶段异常退出，详情见插件日志。",
+    "ended": "❌ 启动失败：后台任务未进入学习循环就结束了，详情见插件日志。",
+    "timeout": (
+        "⏳ 已在后台启动，但初始化尚未完成，任务已登记。"
+        "可用 /bili_status 查看进度，/bili_stop 可停止。"
+    ),
+}
+
+
+def _startup_failure_reply(reason: str) -> str:
+    """Map an internal startup end reason to a user-facing reply."""
+    return _STARTUP_FAILURE_REPLIES.get(
+        reason, f"❌ 启动失败：后台任务在启动阶段已退出（{reason}），详情见插件日志。"
+    )
+
+
 class _BrainRuntime:
     """管理同一插件包内共享的任务及其异步收尾。"""
+
+    STARTUP_READY_TIMEOUT = _STARTUP_READY_TIMEOUT
 
     def __init__(self):
         self.task: asyncio.Task | None = None
@@ -197,6 +230,7 @@ class _BrainRuntime:
         else:
             exc = task.exception()
             if exc is not None:
+                self.last_end_reason = self.last_end_reason or "crashed"
                 self._log_error("B站学习机器人后台任务异常退出", exc)
 
     def start(self, brain):
@@ -205,6 +239,46 @@ class _BrainRuntime:
         self.task = asyncio.create_task(brain.run(), name="bili_learning_brain")
         self.stopping = False
         self.task.add_done_callback(self._on_done)
+
+    async def await_startup(self):
+        """Return the startup outcome: reason string, "timeout", or None when ready.
+
+        The Brain sets ``ready_event`` after login and bridge initialization. A
+        missing credential or a busy instance lock ends ``run()`` before that, and
+        a crash can happen after the first suspension, so waiting for the event is
+        the only reliable way to tell "confirmed started" from "failed to start".
+        """
+        task = self.task
+        if task is None:
+            return self.last_end_reason or "ended"
+        ready = getattr(self.brain, "ready_event", None)
+        if ready is None:
+            # Test doubles and legacy brains without a ready signal: keep the old
+            # behaviour of observing a single event-loop turn.
+            await asyncio.sleep(0)
+            if self.task is None:
+                return self.last_end_reason or "ended"
+            if self.task.done():
+                self._on_done(self.task)
+                return self.last_end_reason or "ended"
+            return getattr(self.brain, "_runtime_end_reason", None)
+        waiter = asyncio.ensure_future(ready.wait())
+        try:
+            done, _ = await asyncio.wait(
+                {task, waiter},
+                timeout=self.STARTUP_READY_TIMEOUT,
+                return_when=asyncio.FIRST_COMPLETED,
+            )
+        finally:
+            if not waiter.done():
+                waiter.cancel()
+                await asyncio.gather(waiter, return_exceptions=True)
+        if waiter in done:
+            return None
+        if task in done:
+            self._on_done(task)
+            return self.last_end_reason or "ended"
+        return getattr(self.brain, "_runtime_end_reason", None) or "timeout"
 
     async def state(self):
         async with self.lock:
@@ -380,14 +454,18 @@ class BilibiliLearningBot(Star):
 
                     brain = AgentBrain()
                     runtime.start(brain)
+                    startup_reason = await runtime.await_startup()
                 except Exception as exc:
                     _log_exception("初始化机器人", exc)
                     reply = f"❌ 机器人初始化失败（{type(exc).__name__}，详情见日志）"
                 else:
-                    reply = (
-                        "✅ 已在后台启动 B站学习机器人，本指令不会阻塞其他对话。"
-                        "发送 /bili_stop 可停止。"
-                    )
+                    if startup_reason:
+                        reply = _startup_failure_reply(startup_reason)
+                    else:
+                        reply = (
+                            "✅ 已在后台启动 B站学习机器人，本指令不会阻塞其他对话。"
+                            "发送 /bili_stop 可停止。"
+                        )
         yield event.plain_result(reply)
 
     @filter.command("bili_stop")

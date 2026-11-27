@@ -207,6 +207,7 @@ class BrainLifecycleTests(unittest.IsolatedAsyncioTestCase):
         self.namespace["_acquire_bot_lock"].return_value = False
         self.brain._run_session = AsyncMock(side_effect=AssertionError("session without lock"))
         self.assertIsNone(await self.brain.run())
+        self.assertEqual(self.brain._runtime_end_reason, "lock_occupied")
         self.brain._run_session.assert_not_awaited()
         self.brain.bili.close.assert_awaited_once_with()
         self.namespace["_release_bot_lock"].assert_not_called()
